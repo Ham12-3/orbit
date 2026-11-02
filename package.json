@@ -1,0 +1,21 @@
+{
+  "name": "orbit",
+  "private": true,
+  "description": "Dev process orchestration only. The apps live in backend/ and frontend/.",
+  "scripts": {
+    "dev": "concurrently --kill-others --names api,web,inngest --prefix-colors blue,green,magenta \"pnpm run dev:api\" \"pnpm run dev:web\" \"pnpm run dev:inngest\"",
+    "dev:api": "uv --directory backend run watchfiles --filter python app.dev.serve app",
+    "dev:web": "pnpm --dir frontend dev",
+    "dev:inngest": "inngest-cli dev --no-discovery -u http://localhost:8000/api/inngest"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.6",
+    "inngest-cli": "1.49.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "inngest-cli"
+    ]
+  },
+  "packageManager": "pnpm@10.6.5"
+}
