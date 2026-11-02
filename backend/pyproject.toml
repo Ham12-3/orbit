@@ -6,11 +6,13 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.1",
     "asyncpg>=0.32.0",
+    "e2b>=2.62.0",
     "fastapi>=0.162.0",
     "httpx>=0.28.1",
     "inngest>=0.5.19",
     "pydantic>=2.14.2",
     "pydantic-settings>=2.16.2",
+    "pyjwt>=2.15.1",
     "sqlalchemy[asyncio]>=2.1.6",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -30,7 +32,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S105", "S106"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
@@ -39,7 +41,8 @@ ban-relative-imports = "all"
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["app", "tests", "alembic"]
+# sandbox-template/ code runs in the sandbox, but is type-checked and tested from here.
+files = ["app", "tests", "alembic", "../sandbox-template"]
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
@@ -48,10 +51,12 @@ warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "../sandbox-template"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 asyncio_default_test_loop_scope = "function"
+addopts = "-m 'not e2b'"
+markers = ["e2b: live tests against E2B (make test-e2b)"]
 filterwarnings = [
     # inngest 0.5.x still uses class-based pydantic config. Not our code.
     "ignore:Support for class-based `config` is deprecated:pydantic.warnings.PydanticDeprecatedSince20:inngest",
@@ -59,6 +64,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
+    "claude-agent-sdk>=0.2.176",
     "mypy>=2.4.1",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",

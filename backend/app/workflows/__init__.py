@@ -1,21 +1,20 @@
 """Inngest client and durable functions, served from the FastAPI app."""
 
+from typing import Any
+
 import inngest
 import inngest.fast_api
 from fastapi import FastAPI
 
-from app.config import Settings
-from app.workflows.client import create_inngest_client
+from app.runs.service import RunServices
 from app.workflows.ping import build_ping
+from app.workflows.run import build_run_functions
 
 
-def build_functions(client: inngest.Inngest) -> list[inngest.Function[object]]:
-    return [build_ping(client)]
+def build_functions(client: inngest.Inngest, services: RunServices) -> list[inngest.Function[Any]]:
+    return [build_ping(client), *build_run_functions(client, services)]
 
 
-def mount_inngest(app: FastAPI, settings: Settings) -> inngest.Inngest:
-    """Serve all Inngest functions at /api/inngest and keep the client on app.state."""
-    client = create_inngest_client(settings)
-    inngest.fast_api.serve(app, client, build_functions(client))
-    app.state.inngest = client
-    return client
+def mount_inngest(app: FastAPI, client: inngest.Inngest, services: RunServices) -> None:
+    """Serve all Inngest functions at /api/inngest."""
+    inngest.fast_api.serve(app, client, build_functions(client, services))

@@ -8,10 +8,17 @@ See [SPEC.md](SPEC.md) for the product spec and [CLAUDE.md](CLAUDE.md) for the e
 ## Quickstart
 
 Prerequisites: Docker Desktop (running), [uv](https://docs.astral.sh/uv/), Node 20.9+, pnpm 10,
-GNU make.
+GNU make, and [ngrok](https://ngrok.com/) with an authtoken and a free static domain.
 
 ```bash
 make install
+```
+
+Then fill in `.env`: `ANTHROPIC_API_KEY`, `E2B_API_KEY`, and
+`PUBLIC_BASE_URL=https://<your-static-domain>.ngrok-free.app`.
+
+```bash
+make sandbox-template
 make dev
 ```
 

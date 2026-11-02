@@ -1,0 +1,2 @@
+# Python outside backend/ (sandbox-template/, scripts/) uses the backend's ruff settings.
+extend = "backend/pyproject.toml"

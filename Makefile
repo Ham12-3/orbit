@@ -5,12 +5,14 @@
 API := uv --directory backend run
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev db-up db-down migrate migrate-test revision test lint fmt typecheck check
+.PHONY: help install dev db-up db-down migrate migrate-test revision test test-e2b lint fmt typecheck check sandbox-template
 
 help:
-	@echo make install      - install backend + frontend deps, create .env files
-	@echo make dev          - Postgres + migrations, then API, web and Inngest Dev Server
+	@echo make install      - install deps, create/update .env files and generated secrets
+	@echo make dev          - Postgres + migrations, then API, web, Inngest Dev Server, ngrok
+	@echo make sandbox-template - build the bot sandbox template on E2B
 	@echo make test         - run backend tests (starts Postgres, migrates test DB)
+	@echo make test-e2b     - live check against E2B: no real key inside a sandbox
 	@echo make check        - lint + typecheck + test
 	@echo make lint / fmt / typecheck
 	@echo make migrate      - alembic upgrade head on the dev DB
@@ -44,14 +46,20 @@ revision:
 test: db-up migrate-test
 	$(API) pytest
 
+test-e2b:
+	$(API) pytest -m e2b
+
+sandbox-template:
+	$(API) python ../sandbox-template/build.py
+
 lint:
-	$(API) ruff check .
-	$(API) ruff format --check .
+	$(API) ruff check . ../sandbox-template ../scripts
+	$(API) ruff format --check . ../sandbox-template ../scripts
 	pnpm --dir frontend lint
 
 fmt:
-	$(API) ruff check --fix .
-	$(API) ruff format .
+	$(API) ruff check --fix . ../sandbox-template ../scripts
+	$(API) ruff format . ../sandbox-template ../scripts
 
 typecheck:
 	$(API) mypy

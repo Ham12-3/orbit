@@ -16,6 +16,7 @@ def create_inngest_client(settings: Settings) -> inngest.Inngest:
         signing_key=_reveal(settings.inngest_signing_key),
         event_key=_reveal(settings.inngest_event_key),
         logger=logging.getLogger("orbit.inngest"),
+        request_timeout=10_000,  # ms, for event sends and API calls
     )
 
 

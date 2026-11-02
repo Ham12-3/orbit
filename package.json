@@ -3,10 +3,11 @@
   "private": true,
   "description": "Dev process orchestration only. The apps live in backend/ and frontend/.",
   "scripts": {
-    "dev": "concurrently --kill-others --names api,web,inngest --prefix-colors blue,green,magenta \"pnpm run dev:api\" \"pnpm run dev:web\" \"pnpm run dev:inngest\"",
+    "dev": "concurrently --kill-others --names api,web,inngest,tunnel --prefix-colors blue,green,magenta,yellow \"pnpm run dev:api\" \"pnpm run dev:web\" \"pnpm run dev:inngest\" \"pnpm run dev:tunnel\"",
     "dev:api": "uv --directory backend run watchfiles --filter python app.dev.serve app",
     "dev:web": "pnpm --dir frontend dev",
-    "dev:inngest": "inngest-cli dev --no-discovery -u http://localhost:8000/api/inngest"
+    "dev:inngest": "inngest-cli dev --no-discovery -u http://localhost:8000/api/inngest",
+    "dev:tunnel": "uv --directory backend run python ../scripts/tunnel.py"
   },
   "devDependencies": {
     "concurrently": "10.0.6",

@@ -7,4 +7,4 @@ async def test_inngest_endpoint_serves_our_functions(client: AsyncClient) -> Non
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["mode"] == "dev"
-    assert body["function_count"] == 1
+    assert body["function_count"] == 3  # ping, execute-run, run-sweeper
