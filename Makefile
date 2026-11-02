@@ -5,7 +5,7 @@
 API := uv --directory backend run
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev db-up db-down migrate migrate-test revision test test-e2b lint fmt typecheck check sandbox-template
+.PHONY: help install dev db-up db-down migrate migrate-test revision test test-e2b lint fmt typecheck check sandbox-template try-run
 
 help:
 	@echo make install      - install deps, create/update .env files and generated secrets
@@ -13,6 +13,7 @@ help:
 	@echo make sandbox-template - build the bot sandbox template on E2B
 	@echo make test         - run backend tests (starts Postgres, migrates test DB)
 	@echo make test-e2b     - live check against E2B: no real key inside a sandbox
+	@echo make try-run p="prompt" [bot=id] - start a bot run and follow its timeline
 	@echo make check        - lint + typecheck + test
 	@echo make lint / fmt / typecheck
 	@echo make migrate      - alembic upgrade head on the dev DB
@@ -51,6 +52,9 @@ test-e2b:
 
 sandbox-template:
 	$(API) python ../sandbox-template/build.py
+
+try-run:
+	$(API) python ../scripts/try_run.py "$(p)" --bot "$(bot)"
 
 lint:
 	$(API) ruff check . ../sandbox-template ../scripts
