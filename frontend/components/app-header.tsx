@@ -1,24 +1,11 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
-import { LogOut, UserRound } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Suspense } from "react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
-import { buttonVariants } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useMe } from "@/lib/queries";
-import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 const LATER = [
@@ -46,17 +33,6 @@ function ActiveBotsLink() {
 }
 
 export function AppHeader() {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const me = useMe();
-
-  async function signOut() {
-    // "local" signs out this browser only; the default revokes every session.
-    await createClient().auth.signOut({ scope: "local" });
-    queryClient.clear();
-    router.replace("/login");
-  }
-
   return (
     <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4 sm:px-6">
@@ -80,25 +56,8 @@ export function AppHeader() {
             </Tooltip>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto">
           <ThemeToggle />
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              aria-label="Account"
-              className={buttonVariants({ variant: "ghost", size: "icon" })}
-            >
-              <UserRound />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-56">
-              <DropdownMenuLabel className="truncate font-normal text-muted-foreground">
-                {me.data?.email ?? "Signed in"}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={signOut}>
-                <LogOut /> Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </div>
     </header>

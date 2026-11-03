@@ -50,11 +50,6 @@ class RunDetail(RunRead):
     events: list[RunEventRead]
 
 
-class StreamTicketRead(BaseModel):
-    ticket: str
-    expires_at: datetime
-
-
 class RunnerEvent(BaseModel):
     seq: int = Field(ge=1)
     type: RunEventType

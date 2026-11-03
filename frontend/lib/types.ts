@@ -28,11 +28,6 @@ export const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
   "timed_out",
 ]);
 
-export interface Me {
-  id: string;
-  email: string | null;
-}
-
 export interface Bot {
   id: string;
   name: string;

@@ -7,7 +7,6 @@ import {
   TERMINAL_STATUSES,
   type Bot,
   type BotCreate,
-  type Me,
   type Run,
   type RunEvent,
   type Thread,
@@ -15,7 +14,6 @@ import {
 } from "@/lib/types";
 
 export const keys = {
-  me: ["me"] as const,
   bots: ["bots"] as const,
   bot: (slug: string) => ["bot", slug] as const,
   botById: (id: string) => ["bot-id", id] as const,
@@ -25,10 +23,6 @@ export const keys = {
   run: (runId: string) => ["run", runId] as const,
 };
 
-export function useMe() {
-  return useQuery({ queryKey: keys.me, queryFn: () => api<Me>("/api/me"), staleTime: Infinity });
-}
-
 export function useBots() {
   return useQuery({ queryKey: keys.bots, queryFn: () => api<Bot[]>("/api/bots") });
 }
@@ -37,6 +31,8 @@ export function useBot(slug: string) {
   return useQuery({
     queryKey: keys.bot(slug),
     queryFn: () => api<Bot>(`/api/bots/by-slug/${encodeURIComponent(slug)}`),
+    // The bot is released just after its run ends; keep the status badge honest.
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 3000 : false),
   });
 }
 
@@ -72,6 +68,14 @@ export function useThread(threadId: string | null) {
     queryKey: keys.thread(threadId ?? ""),
     queryFn: () => api<ThreadDetail>(`/api/threads/${threadId}`),
     enabled: Boolean(threadId),
+    // Safety net: if the run behind the last message has finished but its reply is not
+    // here yet, look again shortly.
+    refetchInterval: (query) => {
+      const last = query.state.data?.messages.at(-1);
+      return last?.role === "user" && last.run_status && TERMINAL_STATUSES.has(last.run_status)
+        ? 1500
+        : false;
+    },
   });
 }
 

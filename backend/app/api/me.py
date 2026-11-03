@@ -10,9 +10,8 @@ router = APIRouter(tags=["me"])
 
 class MeRead(BaseModel):
     id: uuid.UUID
-    email: str | None
 
 
 @router.get("/api/me")
 async def me(user: CurrentUserDep) -> MeRead:
-    return MeRead(id=user.id, email=user.email)
+    return MeRead(id=user.id)

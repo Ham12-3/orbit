@@ -10,7 +10,6 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.run_tokens import RunPrincipal, RunTokenError, verify_run_token
-from app.auth.supabase import SupabaseAuthError, SupabaseUnavailableError, SupabaseVerifier
 from app.config import Settings
 from app.db import Database
 from app.events import EventSender
@@ -57,36 +56,22 @@ def bearer_token(request: Request) -> str | None:
 @dataclass(frozen=True)
 class CurrentUser:
     id: uuid.UUID
-    email: str | None = None
 
 
-def _is_dev_token(token: str, settings: Settings) -> bool:
-    expected = settings.dev_api_token
-    return (
-        settings.orbit_env == "development"
-        and expected is not None
-        and secrets.compare_digest(token, expected.get_secret_value())
-    )
+def get_current_user(request: Request, settings: SettingsDep) -> CurrentUser:
+    """Single-user mode: one local user, behind LOCAL_API_TOKEN (see config).
 
-
-async def get_current_user(request: Request, settings: SettingsDep) -> CurrentUser:
-    """Dashboard auth: a Supabase access token, or the dev token in development only."""
-    token = bearer_token(request)
-    if token is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing token")
-    if _is_dev_token(token, settings):
-        return CurrentUser(id=settings.dev_user_id)
-
-    verifier = cast(SupabaseVerifier | None, request.app.state.supabase_verifier)
-    if verifier is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "SUPABASE_URL is not set")
-    try:
-        claims = await verifier.verify(token)
-    except SupabaseUnavailableError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Auth is unavailable") from exc
-    except SupabaseAuthError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token") from exc
-    return CurrentUser(id=claims.user_id, email=claims.email)
+    Queries still filter by user id, so real accounts can replace this one function later.
+    """
+    expected = settings.local_api_token
+    if expected is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "LOCAL_API_TOKEN is not set (run make install)"
+        )
+    provided = bearer_token(request)
+    if provided is None or not secrets.compare_digest(provided, expected.get_secret_value()):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing API token")
+    return CurrentUser(id=settings.local_user_id)
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]

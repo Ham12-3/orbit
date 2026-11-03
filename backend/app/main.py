@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import bots, health, me, runs, threads
-from app.auth.supabase import SupabaseVerifier
 from app.background import drain
 from app.chat.titles import ClaudeTitleGenerator, TitleGenerator
 from app.config import Settings, get_settings
@@ -31,11 +30,10 @@ def create_app(
     sandboxes: SandboxProvider | None = None,
     events: EventSender | None = None,
     llm_http: httpx.AsyncClient | None = None,
-    auth_http: httpx.AsyncClient | None = None,
     titler: TitleGenerator | None = None,
     inngest_client: inngest.Inngest | None = None,
 ) -> FastAPI:
-    """Build the app. Tests pass fakes for E2B, events, the upstream LLM, JWKS and titles."""
+    """Build the app. Tests pass fakes for E2B, events, the upstream LLM and titles."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
@@ -50,17 +48,6 @@ def create_app(
             settings.llm_upstream_read_timeout_s,
             connect=settings.llm_upstream_connect_timeout_s,
         )
-    )
-    auth_http = auth_http or httpx.AsyncClient(timeout=httpx.Timeout(5.0))
-    verifier = (
-        SupabaseVerifier(
-            settings.supabase_url,
-            audience=settings.supabase_jwt_audience,
-            cache_ttl_s=settings.supabase_jwks_cache_s,
-            http=auth_http,
-        )
-        if settings.supabase_url
-        else None
     )
     if titler is None and settings.anthropic_api_key is not None:
         titler = ClaudeTitleGenerator(
@@ -79,7 +66,6 @@ def create_app(
         await drain()
         if isinstance(titler, ClaudeTitleGenerator):
             await titler.aclose()
-        await auth_http.aclose()
         await llm_http.aclose()
         await db.dispose()
 
@@ -87,7 +73,6 @@ def create_app(
     app.state.settings = settings
     app.state.db = db
     app.state.llm_http = llm_http
-    app.state.supabase_verifier = verifier
     app.state.titler = titler
     app.state.events = run_services.events
     app.state.run_services = run_services

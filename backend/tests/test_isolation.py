@@ -33,6 +33,7 @@ async def test_user_b_cannot_see_user_a_data(client: AsyncClient) -> None:
         f"/api/bots/{bot_id}/runs",
         f"/api/bots/{bot_id}/threads",
         f"/api/runs/{run_id}",
+        f"/api/runs/{run_id}/stream",
         f"/api/threads/{thread_id}",
     ]:
         response = await client.get(path, headers=AUTH_B)
@@ -48,7 +49,6 @@ async def test_user_b_cannot_act_on_user_a_data(client: AsyncClient) -> None:
         (f"/api/bots/{bot_id}/threads", {"message": "hello"}),
         (f"/api/threads/{thread_id}/messages", {"content": "hello"}),
         (f"/api/runs/{run_id}/cancel", None),
-        (f"/api/runs/{run_id}/stream-ticket", None),
     ]
     for path, body in attempts:
         response = await client.post(path, json=body, headers=AUTH_B)
@@ -58,18 +58,3 @@ async def test_user_b_cannot_act_on_user_a_data(client: AsyncClient) -> None:
     assert (await client.get(f"/api/runs/{run_id}", headers=AUTH)).json()["status"] == "queued"
     thread = (await client.get(f"/api/threads/{thread_id}", headers=AUTH)).json()
     assert [m["content"] for m in thread["messages"]] == ["hi"]
-
-
-async def test_a_stream_ticket_only_opens_its_own_run(client: AsyncClient) -> None:
-    a = await _a_has_everything(client)
-    other_bot = await create_bot(client, headers=AUTH_B, name="B's bot")
-    b_run = (
-        await client.post(f"/api/bots/{other_bot['id']}/runs", json={"prompt": "x"}, headers=AUTH_B)
-    ).json()
-    ticket = (await client.post(f"/api/runs/{a['run']['id']}/stream-ticket", headers=AUTH)).json()[
-        "ticket"
-    ]
-
-    response = await client.get(f"/api/runs/{b_run['id']}/stream", params={"ticket": ticket})
-
-    assert response.status_code == 401

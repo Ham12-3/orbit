@@ -3,7 +3,7 @@
     make try-run p="Create workspace/hello.txt containing today's date"
     make try-run p="What is in workspace/hello.txt?" bot=<bot-id>
 
-Without `bot`, it creates a new bot. Talks to the local API with DEV_API_TOKEN from .env.
+Without `bot`, it creates a new bot. Talks to the local API with LOCAL_API_TOKEN from .env.
 """
 
 import argparse
@@ -40,9 +40,9 @@ def main() -> int:
     parser.add_argument("--bot", default="")
     args = parser.parse_args()
 
-    token = dotenv_values(ROOT / ".env").get("DEV_API_TOKEN")
+    token = dotenv_values(ROOT / ".env").get("LOCAL_API_TOKEN")
     if not token:
-        raise SystemExit("DEV_API_TOKEN is not set in .env (run make install)")
+        raise SystemExit("LOCAL_API_TOKEN is not set in .env (run make install)")
     with httpx.Client(
         base_url=API, headers={"Authorization": f"Bearer {token}"}, timeout=30
     ) as api:

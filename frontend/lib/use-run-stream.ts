@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { api, API_URL } from "@/lib/api";
-import type { Run, RunEvent, StreamTicket } from "@/lib/types";
+import { backendUrl } from "@/lib/api";
+import type { Run, RunEvent } from "@/lib/types";
 
 export interface RunStream {
   events: RunEvent[];
@@ -16,13 +16,16 @@ const EMPTY: RunStream = { events: [], run: null, ended: false, error: null };
 const MAX_BACKOFF_MS = 15_000;
 
 /**
- * Follows a run live over SSE. EventSource cannot send an Authorization header, so it first
- * gets a short-lived stream ticket. The browser reconnects by itself on network blips (sending
- * Last-Event-ID); when the stream is closed for good (e.g. the ticket expired) this fetches a
- * new ticket and resumes with `after=<last event id>`.
+ * Follows a run live over SSE (through the Next.js forwarder). The browser reconnects by
+ * itself on network blips, sending Last-Event-ID; if the stream is closed for good this
+ * reopens it with `after=<last event id>` so nothing is missed or repeated.
  */
 export function useRunStream(runId: string | null, onEnd?: (run: Run | null) => void): RunStream {
-  const [state, setState] = useState<RunStream>(EMPTY);
+  // Tagged with its run, so switching runs shows an empty stream without resetting state.
+  const [tagged, setTagged] = useState<{ runId: string | null; stream: RunStream }>({
+    runId: null,
+    stream: EMPTY,
+  });
   const onEndRef = useRef(onEnd);
 
   useEffect(() => {
@@ -37,25 +40,16 @@ export function useRunStream(runId: string | null, onEnd?: (run: Run | null) => 
     let stopped = false;
     let latestRun: Run | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    setState(EMPTY);
+    const setState = (update: (s: RunStream) => RunStream) =>
+      setTagged((current) => ({
+        runId,
+        stream: update(current.runId === runId ? current.stream : EMPTY),
+      }));
 
-    const open = async () => {
-      let ticket: StreamTicket;
-      try {
-        ticket = await api<StreamTicket>(`/api/runs/${runId}/stream-ticket`, { method: "POST" });
-      } catch (err) {
-        if (!stopped) {
-          setState((s) => ({ ...s, error: err instanceof Error ? err.message : "Stream failed" }));
-          schedule();
-        }
-        return;
-      }
+    const open = () => {
       if (stopped) return;
-
-      const url = new URL(`${API_URL}/api/runs/${runId}/stream`);
-      url.searchParams.set("ticket", ticket.ticket);
-      if (lastId) url.searchParams.set("after", String(lastId));
-      source = new EventSource(url);
+      const query = lastId ? `?after=${lastId}` : "";
+      source = new EventSource(backendUrl(`/api/runs/${runId}/stream${query}`));
 
       source.addEventListener("run_event", (e) => {
         const event = JSON.parse((e as MessageEvent<string>).data) as RunEvent;
@@ -80,17 +74,14 @@ export function useRunStream(runId: string | null, onEnd?: (run: Run | null) => 
       source.onerror = () => {
         // CONNECTING means the browser is retrying by itself; CLOSED means it gave up.
         if (source?.readyState === EventSource.CLOSED && !stopped) {
-          schedule();
+          attempts += 1;
+          setState((s) => ({ ...s, error: "connection lost" }));
+          retryTimer = setTimeout(open, Math.min(1000 * 2 ** attempts, MAX_BACKOFF_MS));
         }
       };
     };
 
-    const schedule = () => {
-      attempts += 1;
-      retryTimer = setTimeout(open, Math.min(1000 * 2 ** attempts, MAX_BACKOFF_MS));
-    };
-
-    void open();
+    open();
     return () => {
       stopped = true;
       clearTimeout(retryTimer);
@@ -98,5 +89,5 @@ export function useRunStream(runId: string | null, onEnd?: (run: Run | null) => 
     };
   }, [runId]);
 
-  return state;
+  return tagged.runId === runId ? tagged.stream : EMPTY;
 }

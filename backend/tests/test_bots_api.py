@@ -10,7 +10,7 @@ from tests.conftest import AUTH, create_bot
 from tests.fakes import RecordingEvents
 
 
-async def test_dashboard_routes_require_the_dev_token(client: AsyncClient) -> None:
+async def test_dashboard_routes_require_the_api_token(client: AsyncClient) -> None:
     assert (await client.get("/api/bots")).status_code == 401
     wrong = {"Authorization": "Bearer nope"}
     assert (await client.get("/api/bots", headers=wrong)).status_code == 401

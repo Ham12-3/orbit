@@ -1,14 +1,12 @@
 """Live run timeline over SSE, with stream tickets."""
 
 import json
-import logging
 import uuid
 
 from httpx import AsyncClient
 from sqlalchemy import update
 
 from app.db import Database
-from app.logging_config import _RedactStreamTickets
 from app.models import Run
 from app.models.enums import RunEventType, RunStatus
 from app.runs.timeline import add_runner_events
@@ -50,19 +48,10 @@ async def finished_run_with_events(client: AsyncClient, db: Database) -> str:
     return run_id
 
 
-async def ticket_for(client: AsyncClient, run_id: str) -> str:
-    response = await client.post(f"/api/runs/{run_id}/stream-ticket", headers=AUTH)
-    assert response.status_code == 200, response.text
-    ticket: str = response.json()["ticket"]
-    return ticket
-
-
 async def test_stream_sends_events_then_the_run_then_end(client: AsyncClient, db: Database) -> None:
     run_id = await finished_run_with_events(client, db)
 
-    response = await client.get(
-        f"/api/runs/{run_id}/stream", params={"ticket": await ticket_for(client, run_id)}
-    )
+    response = await client.get(f"/api/runs/{run_id}/stream", headers=AUTH)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -78,8 +67,7 @@ async def test_reconnect_resumes_after_last_event_id(client: AsyncClient, db: Da
 
     response = await client.get(
         f"/api/runs/{run_id}/stream",
-        params={"ticket": await ticket_for(client, run_id)},
-        headers={"Last-Event-ID": "1"},
+        headers={**AUTH, "Last-Event-ID": "1"},
     )
 
     events = parse_sse(response.text)
@@ -89,40 +77,13 @@ async def test_reconnect_resumes_after_last_event_id(client: AsyncClient, db: Da
 async def test_manual_reconnect_resumes_with_after(client: AsyncClient, db: Database) -> None:
     run_id = await finished_run_with_events(client, db)
 
-    response = await client.get(
-        f"/api/runs/{run_id}/stream",
-        params={"ticket": await ticket_for(client, run_id), "after": 1},
-    )
+    response = await client.get(f"/api/runs/{run_id}/stream", params={"after": 1}, headers=AUTH)
 
     events = parse_sse(response.text)
     assert [e.get("id") for e in events if e["event"] == "run_event"] == ["2"]
 
 
-async def test_stream_requires_a_valid_ticket(client: AsyncClient, db: Database) -> None:
+async def test_stream_requires_the_api_token(client: AsyncClient, db: Database) -> None:
     run_id = await finished_run_with_events(client, db)
 
-    assert (await client.get(f"/api/runs/{run_id}/stream")).status_code == 422
-    bad = await client.get(f"/api/runs/{run_id}/stream", params={"ticket": "not-a-ticket"})
-    assert bad.status_code == 401
-    # A dashboard bearer token is not a ticket.
-    bearer = AUTH["Authorization"].removeprefix("Bearer ")
-    assert (
-        await client.get(f"/api/runs/{run_id}/stream", params={"ticket": bearer})
-    ).status_code == 401
-
-
-def test_tickets_never_reach_the_access_log() -> None:
-    record = logging.LogRecord(
-        "uvicorn.access",
-        logging.INFO,
-        __file__,
-        1,
-        '%s - "%s %s HTTP/%s" %d',
-        ("127.0.0.1:1", "GET", "/api/runs/abc/stream?ticket=eyJsecret.part", "1.1", 200),
-        None,
-    )
-
-    _RedactStreamTickets().filter(record)
-
-    assert "eyJsecret" not in record.getMessage()
-    assert "ticket=***" in record.getMessage()
+    assert (await client.get(f"/api/runs/{run_id}/stream")).status_code == 401

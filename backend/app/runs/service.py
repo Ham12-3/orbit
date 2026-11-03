@@ -305,7 +305,7 @@ class RunServices:
                 await self._stop_sandbox(run.sandbox_id, rid)
 
             await s.refresh(run)
-            await ensure_bot_reply(s, run)
+            await ensure_bot_reply(s, run)  # normally already written by _finish
             next_run_id = await self._release_bot(s, bot_id=run.bot_id, run_id=rid)
             await s.commit()
             return str(next_run_id) if next_run_id else None
@@ -331,10 +331,7 @@ class RunServices:
         await revoke_run_tokens(session, run.id)
         await session.commit()
         await session.refresh(run)
-        if was_queued:  # no workflow will finalize it
-            await ensure_bot_reply(session, run)
-            await session.commit()
-        else:
+        if not was_queued:
             await self._kill_runner_quietly(run)
             await self._send(RUN_FINISHED, run.id)
         return run
@@ -429,9 +426,16 @@ class RunServices:
         from_statuses: tuple[RunStatus, ...] = ACTIVE,
         **values: Any,
     ) -> bool:
-        return await self._transition(
+        finished = await self._transition(
             s, run_id, from_statuses, status=status, finished_at=utcnow(), **values
         )
+        if finished:
+            # Same transaction as the status change: whoever sees the run finished (the live
+            # stream, a page refetch) also sees the bot's reply in its chat thread.
+            run = await s.get(Run, run_id, populate_existing=True)
+            if run is not None:
+                await ensure_bot_reply(s, run)
+        return finished
 
     async def _release_bot(
         self, s: AsyncSession, *, bot_id: uuid.UUID, run_id: uuid.UUID

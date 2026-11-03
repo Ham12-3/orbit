@@ -1,9 +1,6 @@
 """Logging setup."""
 
 import logging
-import re
-
-_TICKET = re.compile(r"ticket=[^&\s]+")
 
 
 class _DropInngestSyncPolls(logging.Filter):
@@ -11,18 +8,6 @@ class _DropInngestSyncPolls(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         return "PUT /api/inngest" not in record.getMessage()
-
-
-class _RedactStreamTickets(logging.Filter):
-    """Live-run URLs carry a ticket in the query string; keep it out of the access log."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.args, tuple):
-            record.args = tuple(
-                _TICKET.sub("ticket=***", arg) if isinstance(arg, str) else arg
-                for arg in record.args
-            )
-        return True
 
 
 def configure_logging(level: str) -> None:
@@ -34,6 +19,6 @@ def configure_logging(level: str) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     access = logging.getLogger("uvicorn.access")
-    for filter_type in (_DropInngestSyncPolls, _RedactStreamTickets):
+    for filter_type in (_DropInngestSyncPolls,):
         if not any(isinstance(f, filter_type) for f in access.filters):
             access.addFilter(filter_type())

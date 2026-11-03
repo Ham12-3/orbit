@@ -73,6 +73,10 @@ async def test_bot_reply_and_session_are_saved_when_the_run_ends(
     await services.start(run_id)
 
     await runner_completes(client, sandboxes, run_id, summary="Hi there!", session_id="sess-1")
+
+    # The reply is there as soon as the run is finished, before the workflow finalizes it.
+    early = await get_thread(client, thread["id"])
+    assert [m["content"] for m in early["messages"]] == ["Hello bot", "Hi there!"]
     await services.finalize(run_id)
 
     detail = await get_thread(client, thread["id"])

@@ -1,19 +1,17 @@
-import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 import inngest
-import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import text
 
+from app.api.deps import CurrentUser, get_app_settings, get_current_user
 from app.background import drain
 from app.config import Settings
 from app.db import Database
@@ -23,54 +21,28 @@ from app.runs.service import RunServices
 from app.workflows.client import create_inngest_client
 from tests.fakes import FakeSandboxProvider, FakeTitler, RecordingEvents
 
-# --- A fake Supabase project: a real ES256 key pair whose public half is served as JWKS.
-SUPABASE_URL = "https://test-project.supabase.co"
-ISSUER = f"{SUPABASE_URL}/auth/v1"
-SIGNING_KEY = ec.generate_private_key(ec.SECP256R1())
-KEY_ID = "test-signing-key"
-JWKS = {
-    "keys": [
-        {
-            **jwt.algorithms.ECAlgorithm.to_jwk(SIGNING_KEY.public_key(), as_dict=True),
-            "kid": KEY_ID,
-            "alg": "ES256",
-            "use": "sig",
-        }
-    ]
-}
-
-USER_A = uuid.UUID("aaaaaaaa-0000-4000-8000-00000000000a")
-USER_B = uuid.UUID("bbbbbbbb-0000-4000-8000-00000000000b")
-
-
-def supabase_token(user_id: uuid.UUID, **overrides: Any) -> str:
-    now = int(time.time())
-    claims = {
-        "sub": str(user_id),
-        "iss": ISSUER,
-        "aud": "authenticated",
-        "role": "authenticated",
-        "email": f"{str(user_id)[:4]}@example.com",
-        "iat": now,
-        "exp": now + 3600,
-    }
-    key: Any = overrides.pop("key", SIGNING_KEY)
-    algorithm: str = overrides.pop("algorithm", "ES256")
-    kid: str = overrides.pop("kid", KEY_ID)
-    claims.update(overrides)
-    return jwt.encode(claims, key, algorithm=algorithm, headers={"kid": kid})
-
-
-AUTH = {"Authorization": f"Bearer {supabase_token(USER_A)}"}
-AUTH_B = {"Authorization": f"Bearer {supabase_token(USER_B)}"}
-
-DEV_TOKEN = "dev-token-for-tests"
+LOCAL_TOKEN = "local-api-token-for-tests"
 SECRETS = {
     "anthropic_api_key": "sk-ant-REAL-KEY-must-never-reach-a-sandbox",
     "e2b_api_key": "e2b_REAL_KEY_must_never_reach_a_sandbox",
     "run_token_secret": "run-token-signing-secret-for-tests-0123456789",
-    "dev_api_token": DEV_TOKEN,
+    "local_api_token": LOCAL_TOKEN,
 }
+
+USER_A = Settings(_env_file=None).local_user_id  # the single local user
+USER_B = uuid.UUID("bbbbbbbb-0000-4000-8000-00000000000b")
+AUTH = {"Authorization": f"Bearer {LOCAL_TOKEN}"}
+# Single-user mode has one user. Tests impersonate a second one (see _impersonating_user) to
+# prove every query stays scoped, so real accounts can be added later without leaks.
+AUTH_B = {**AUTH, "X-Test-User": str(USER_B)}
+
+
+def _impersonating_user(
+    request: Request, settings: Annotated[Settings, Depends(get_app_settings)]
+) -> CurrentUser:
+    user = get_current_user(request, settings)  # the token is still required
+    other = request.headers.get("x-test-user")
+    return CurrentUser(id=uuid.UUID(other)) if other else user
 
 
 @pytest.fixture
@@ -83,7 +55,6 @@ def settings() -> Settings:
             "database_url": base.test_database_url,
             "inngest_dev": True,
             "public_base_url": "https://orbit.example.test",
-            "supabase_url": SUPABASE_URL,
             **{name: SecretStr(value) for name, value in SECRETS.items()},
         }
     )
@@ -101,18 +72,6 @@ class Upstream:
         return self.handler(request)
 
 
-@dataclass
-class JwksServer:
-    """The fake Supabase JWKS endpoint."""
-
-    calls: int = 0
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        assert request.url == f"{ISSUER}/.well-known/jwks.json"
-        self.calls += 1
-        return httpx.Response(200, json=JWKS)
-
-
 @pytest.fixture(scope="session")
 def inngest_client() -> inngest.Inngest:
     """Built once: each Inngest client creates HTTP clients, and SSL setup is slow on Windows."""
@@ -122,11 +81,6 @@ def inngest_client() -> inngest.Inngest:
 @pytest.fixture
 def upstream() -> Upstream:
     return Upstream()
-
-
-@pytest.fixture
-def jwks() -> JwksServer:
-    return JwksServer()
 
 
 @pytest.fixture
@@ -148,7 +102,6 @@ def titler() -> FakeTitler:
 async def app(
     settings: Settings,
     upstream: Upstream,
-    jwks: JwksServer,
     sandboxes: FakeSandboxProvider,
     events: RecordingEvents,
     titler: FakeTitler,
@@ -159,10 +112,10 @@ async def app(
         sandboxes=sandboxes,
         events=events,
         llm_http=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
-        auth_http=httpx.AsyncClient(transport=httpx.MockTransport(jwks)),
         titler=titler,
         inngest_client=inngest_client,
     )
+    application.dependency_overrides[get_current_user] = _impersonating_user
     db: Database = application.state.db
     async with db.engine.begin() as conn:
         # Every table hangs off bots with ON DELETE CASCADE; DELETE is far faster than
