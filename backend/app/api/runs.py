@@ -85,8 +85,12 @@ async def stream_run(
     run_id: uuid.UUID,
     db: DatabaseDep,
     last_event_id: Annotated[int | None, Header()] = None,
+    after: Annotated[int | None, Query(ge=0)] = None,
 ) -> AsyncIterable[ServerSentEvent]:
-    async for event in run_stream(db, run_id, after_event_id=last_event_id or 0):
+    # Browsers send Last-Event-ID on automatic reconnects; `after` is for manual ones (a new
+    # EventSource opened with a fresh ticket cannot set headers).
+    start = last_event_id if last_event_id is not None else (after or 0)
+    async for event in run_stream(db, run_id, after_event_id=start):
         yield event
 
 

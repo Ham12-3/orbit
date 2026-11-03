@@ -86,6 +86,18 @@ async def test_reconnect_resumes_after_last_event_id(client: AsyncClient, db: Da
     assert [e.get("id") for e in events if e["event"] == "run_event"] == ["2"]
 
 
+async def test_manual_reconnect_resumes_with_after(client: AsyncClient, db: Database) -> None:
+    run_id = await finished_run_with_events(client, db)
+
+    response = await client.get(
+        f"/api/runs/{run_id}/stream",
+        params={"ticket": await ticket_for(client, run_id), "after": 1},
+    )
+
+    events = parse_sse(response.text)
+    assert [e.get("id") for e in events if e["event"] == "run_event"] == ["2"]
+
+
 async def test_stream_requires_a_valid_ticket(client: AsyncClient, db: Database) -> None:
     run_id = await finished_run_with_events(client, db)
 

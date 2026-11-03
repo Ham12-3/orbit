@@ -15,7 +15,9 @@ GNU make, and the Microsoft Dev Tunnels CLI (`winget install Microsoft.devtunnel
 make install
 ```
 
-Then fill in `ANTHROPIC_API_KEY` and `E2B_API_KEY` in `.env`, and:
+Then fill in `ANTHROPIC_API_KEY`, `E2B_API_KEY` and `SUPABASE_URL` in `.env`, the
+`NEXT_PUBLIC_SUPABASE_*` values in `frontend/.env.local`, apply the Supabase dashboard settings
+listed in CLAUDE.md ("Supabase setup"), and:
 
 ```bash
 make tunnel-setup
@@ -31,7 +33,7 @@ make try-run p="Create workspace/hello.txt containing today's date"
 
 Then open:
 
-- Web: http://localhost:3000
+- Web: http://localhost:3000 (sign in with a magic link)
 - API health: http://localhost:8000/health
 - Inngest Dev Server: http://localhost:8288
 

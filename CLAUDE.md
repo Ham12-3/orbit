@@ -5,9 +5,9 @@ Claude Agent SDK inside it, connects to the user's apps, runs on schedules and e
 it learns, and asks for approval before risky actions. The full spec is in [SPEC.md](SPEC.md); build
 phases are in section 10 of it.
 
-**Status:** Phase 1 (one bot, one run, end to end; API only) done and verified live on E2B: a bot
-wrote `workspace/hello.txt`, and a second run read it back after pause/resume. Next: Phase 2
-(dashboard, auth, chat, live runs).
+**Status:** Phase 2 (dashboard, Supabase login, chat with session resume, live run timelines) built.
+Verified live: a two-message chat where the bot remembered the first message, streamed over SSE.
+Next: Phase 3 (memory and files).
 
 ## Run it
 
@@ -18,6 +18,8 @@ Microsoft Dev Tunnels CLI (`winget install Microsoft.devtunnel`, then `devtunnel
 make install            # deps; creates/updates .env and generates DEV_API_TOKEN + RUN_TOKEN_SECRET
 # then set ANTHROPIC_API_KEY and E2B_API_KEY in .env
 make tunnel-setup       # once: creates the dev tunnel, writes DEVTUNNEL_ID + PUBLIC_BASE_URL to .env
+# Supabase (project ref mndvtcxmxfnmsvbcnvgv): SUPABASE_URL in .env, NEXT_PUBLIC_SUPABASE_* in
+# frontend/.env.local. Dashboard settings it needs are listed under "Supabase setup" below.
 make sandbox-template   # once, and after changing sandbox-template/template.py
 make dev                # Postgres + migrations, then API, web, Inngest Dev Server and the tunnel
 make try-run p="Create workspace/hello.txt containing today's date"   # bot=<id> reuses a bot
@@ -33,9 +35,24 @@ make try-run p="Create workspace/hello.txt containing today's date"   # bot=<id>
 | Public URL (sandboxes) | `PUBLIC_BASE_URL` -> :8000 via the dev tunnel (`*-8000.<region>.devtunnels.ms`) |
 | Postgres | localhost:5432, user/pass/db `orbit` (tests use `orbit_test`) |
 
-Phase 1 API (send `Authorization: Bearer $DEV_API_TOKEN`): `POST /api/bots`, `GET /api/bots`,
-`GET /api/bots/{id}`, `POST /api/bots/{id}/runs {"prompt"}`, `GET /api/runs/{id}` (with events),
-`POST /api/runs/{id}/cancel`.
+Dashboard API (Supabase access token as `Authorization: Bearer`; in development the
+`DEV_API_TOKEN` also works and acts as `DEV_USER_ID`):
+- `GET /api/me`; bots: `POST/GET /api/bots`, `GET /api/bots/{id}`, `GET /api/bots/by-slug/{slug}`,
+  `GET|POST /api/bots/{id}/runs`
+- chat: `GET|POST /api/bots/{id}/threads` (POST `{"message"}`), `GET /api/threads/{id}`,
+  `POST /api/threads/{id}/messages {"content"}`
+- runs: `GET /api/runs/{id}` (with events), `POST /api/runs/{id}/cancel`,
+  `POST /api/runs/{id}/stream-ticket`, `GET /api/runs/{id}/stream?ticket=...[&after=N]` (SSE)
+
+### Supabase setup (once per project)
+
+- Auth -> URL Configuration: Site URL `http://localhost:3000`; Redirect URLs add
+  `http://localhost:3000/**`.
+- Auth -> Emails -> Magic Link template: the link must carry a token hash for server-side
+  verification:
+  `<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/bots">Sign in</a>`
+- The built-in email sender only mails members of the Supabase organization, 2 emails/hour.
+- Signing keys must be asymmetric (new projects are; ours is ES256). HS256 tokens are rejected.
 
 Other targets: `make test`, `make test-e2b` (live, needs keys + template), `make try-run`,
 `make tunnel-setup`, `make lint`, `make fmt`,
@@ -70,20 +87,37 @@ backend/                  FastAPI control plane (uv, Python 3.12)
     models/               bots, runs, run_events, run_tokens, llm_usage; enums as checked VARCHARs
     schemas/              Pydantic request/response models
     auth/run_tokens.py    issue / verify / revoke run tokens (JWT + stored SHA-256)
-    api/                  dashboard routes (bots, runs, health); deps.py: auth + shared deps
+    auth/supabase.py      verify Supabase access tokens against the project's JWKS
+    auth/stream_tickets.py short-lived, run-scoped tickets for EventSource streams
+    api/                  dashboard routes (me, bots, threads, runs, health); deps.py: auth + deps
+    chat/                 bot replies for finished chat runs, thread titles (Haiku)
+    background.py         spawn()/drain() for fire-and-forget tasks (usage writes, titles)
     internal/             runner callbacks: /internal/runs/{id}/events and /complete
     llm_proxy/            /llm/v1/messages (+count_tokens): auth, budget, forward, meter, pricing
     runs/service.py       RunServices: enqueue, claim, start, check, finalize, cancel, sweeper
     runs/timeline.py      writing run_events
+    runs/stream.py        the SSE generator (polls run_events ~1s, Last-Event-ID resume)
     sandboxes/            provider protocol, E2B implementation, in-sandbox layout + CLAUDE.md
     workflows/            Inngest client, execute-run workflow, sweeper cron, ping
   tests/                  fakes.py has FakeSandboxProvider + RecordingEvents
 sandbox-template/         E2B template (template.py, build.py) and runner.py (runs in the sandbox)
-frontend/                 Next.js 16 App Router, TS strict, Tailwind v4, shadcn/ui
+frontend/                 Next.js 16 App Router, TS strict, Tailwind v4, shadcn/ui (Base UI)
+  proxy.ts                Supabase session refresh + redirect to /login (Next 16's middleware)
+  app/login, app/auth/confirm   magic-link sign-in (verifyOtp with token_hash)
+  app/(app)/              signed-in pages: /bots, /bots/new, /bots/[slug], /runs/[id]
+  components/             app-header, bots/*, runs/*, run-timeline, markdown, status-badge, ui/*
+  lib/                    api.ts (fetch + bearer), queries.ts (TanStack Query), use-run-stream.ts,
+                          supabase/{client,server,proxy}.ts, types.ts (mirror backend schemas)
 ```
 
 Section 8 packages not yet created (`tool_gateway/`, `memory/`, `notifications/`) arrive with the
 phase that first puts code in them.
+
+Frontend rules: data comes from the API via TanStack Query hooks in `lib/queries.ts`; types in
+`lib/types.ts` mirror the backend schemas. Under Cache Components, client components that read
+`useParams`/`useSearchParams`/`usePathname` sit inside `<Suspense>` (pages wrap their client
+view; the header wraps its active-link). shadcn here is Base UI: no `asChild`; style a `Link` with
+`buttonVariants()`, Select needs `items` for labels.
 
 ## Coding rules
 
@@ -157,8 +191,25 @@ phase that first puts code in them.
   estimate). Daily budget = input + cache writes + output since 00:00 UTC; cache reads are excluded
   (the agent re-reads its whole prefix every turn). Prices in `llm_proxy/pricing.py` from the
   official pricing page; its keys are the model allow-list.
-- **Dashboard auth (Phase 1 only):** a static `DEV_API_TOKEN` bearer and one `DEV_USER_ID`. Needed
-  because the tunnel makes the backend public. Phase 2 swaps `get_current_user` for Supabase JWTs.
+- **Dashboard auth = Supabase access tokens**, verified locally against the project's JWKS
+  (ES256/RS256 only; issuer, `aud=authenticated`, `role=authenticated`, expiry checked; keys cached
+  10 min, refetched on an unknown key id at most every 30 s). `DEV_API_TOKEN` works only when
+  `ORBIT_ENV=development` and maps to `DEV_USER_ID` (for scripts like `make try-run`).
+- **Login:** magic link via `signInWithOtp`; the email template links to `/auth/confirm` with a
+  `token_hash`, which `verifyOtp` exchanges server-side (the default link puts the session in the
+  URL fragment, which the server never sees). `proxy.ts` refreshes the session with `getClaims()`
+  and redirects signed-out visitors. Sign-out uses `scope: "local"`.
+- **Chat:** a message creates a `chat` run linked to its thread. The thread's `agent_session_id` is
+  read at run start (so a queued follow-up resumes the latest session) and passed to the runner
+  as `ORBIT_RESUME_SESSION_ID`. `chat/replies.ensure_bot_reply` writes the bot message from every
+  ending (finalize, or cancelling a queued run): summary, or a short failure note. Titles: plain
+  fallback immediately, then `claude-haiku-5-5` (thinking off) in the background; not metered.
+- **Live runs over SSE:** EventSource cannot send headers, so the page gets a 5-minute,
+  run-scoped stream ticket (HS256, audience `orbit-stream`, never accepted as a run token) and
+  opens `/stream?ticket=`. The server polls `run_events` about once a second with a fresh session,
+  sends `run_event` (with ids), `run` on any change, and `end`; FastAPI adds 15 s keep-alives.
+  Tickets are redacted from the access log. The client re-tickets with `after=<last id>` when a
+  stream is closed for good.
 - **Tunnel = Microsoft Dev Tunnels**, not ngrok or Cloudflare. ngrok's free plan now requires agent
   3.28+ and Windows Defender quarantined the new ngrok download; Cloudflare Quick Tunnels do not
   support SSE (their docs) and named ones need a domain. A persistent dev tunnel keeps its URL
@@ -184,6 +235,9 @@ phase that first puts code in them.
   short-lived, scoped to one run, revoked at the end, only buys budget-capped LLM calls and event
   writes for that run. Full fix (run the CLI as a second user) is a Phase 8 candidate.
 - No rate limiting on public endpoints yet (spec section 7); planned for Phase 8.
+- If a bot's sandbox is replaced, its threads' Agent SDK sessions are gone and resuming fails; the
+  run errors out. Phase 3/8: detect and start a fresh session.
+- Thread titles call the Anthropic API outside any bot budget (tiny, Haiku).
 - The Inngest Dev Server loses in-flight runs on restart; the sweeper cleans up within ~10 minutes
   after the run's deadline. Inngest Cloud in production does not have this problem.
 - The dev tunnel needs the `devtunnel user login` token, valid "several days"; re-run the login
@@ -213,6 +267,10 @@ phase that first puts code in them.
 - devtunnel CLI 1.0.2115: `create -a --expiration 30d --request-timeout 0 --json`, `port create
   <id> -p 8000 --protocol http`, `host <id>` (prints the URL; `show --json` does not).
 - Claude Code (bundled with the SDK) 2.1.316.
+- @supabase/ssr 0.12.7, @supabase/supabase-js 2.118, @tanstack/react-query 5.105, react-markdown 10,
+  anthropic (Python) 2.4.0, PyJWT 2.15 with `crypto` extra (ES256 needs `cryptography`).
+- FastAPI SSE is native since 0.135: `from fastapi.sse import EventSourceResponse, ServerSentEvent`,
+  route `response_class=EventSourceResponse`, async generator body, 15 s keep-alive pings.
 - inngest-cli 1.49.0, FastAPI 0.162, SQLAlchemy 2.1
   (`postgresql.distinct_on` replaces `.distinct(col)`), Alembic 1.20, pydantic-settings 2.16, PyJWT
   2.15, pytest 9, pytest-asyncio 1.4, Next.js 16.4, React 19.3, Tailwind 4.3, shadcn CLI 4.23.

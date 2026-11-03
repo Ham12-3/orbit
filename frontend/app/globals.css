@@ -128,3 +128,26 @@
     @apply font-sans;
   }
 }
+/* Bot output rendered by components/markdown.tsx (no typography plugin needed). */
+@layer components {
+  .markdown {
+    @apply space-y-3 leading-relaxed break-words;
+  }
+  .markdown :where(h1, h2, h3, h4) {
+    @apply font-heading font-semibold tracking-tight;
+  }
+  .markdown h1 { @apply text-lg; }
+  .markdown h2 { @apply text-base; }
+  .markdown :where(ul) { @apply list-disc space-y-1 pl-5; }
+  .markdown :where(ol) { @apply list-decimal space-y-1 pl-5; }
+  .markdown a { @apply underline underline-offset-4; }
+  .markdown :where(code):not(pre code) {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em];
+  }
+  .markdown pre {
+    @apply overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs;
+  }
+  .markdown blockquote { @apply border-l-2 pl-3 text-muted-foreground; }
+  .markdown table { @apply w-full border-collapse text-left text-xs; }
+  .markdown :where(th, td) { @apply border-b px-2 py-1; }
+}
