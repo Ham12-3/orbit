@@ -4,7 +4,15 @@ const API_URL = process.env.ORBIT_API_URL ?? "http://localhost:8000";
 const API_TOKEN = process.env.ORBIT_API_TOKEN;
 
 const FORWARD_REQUEST_HEADERS = ["content-type", "accept", "last-event-id"];
-const FORWARD_RESPONSE_HEADERS = ["content-type", "cache-control", "x-accel-buffering"];
+const FORWARD_RESPONSE_HEADERS = [
+  "content-type",
+  "content-length",
+  "content-disposition",
+  "cache-control",
+  "x-accel-buffering",
+  "x-content-type-options",
+  "content-security-policy",
+];
 
 /**
  * The browser only talks to this Next.js server. It forwards /api/backend/<path> to the
@@ -34,7 +42,7 @@ async function forward(request: NextRequest, path: string[]): Promise<Response> 
     upstream = await fetch(url, {
       method: request.method,
       headers,
-      body: request.method === "GET" ? undefined : await request.arrayBuffer(),
+      body: request.method === "GET" || request.method === "DELETE" ? undefined : await request.arrayBuffer(),
       signal: request.signal, // the browser leaving ends the upstream request (and stream)
       cache: "no-store",
     });
@@ -51,7 +59,11 @@ async function forward(request: NextRequest, path: string[]): Promise<Response> 
     const value = upstream.headers.get(name);
     if (value) responseHeaders.set(name, value);
   }
-  return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+  const noBody = upstream.status === 204 || upstream.status === 304;
+  return new Response(noBody ? null : upstream.body, {
+    status: upstream.status,
+    headers: responseHeaders,
+  });
 }
 
 export async function GET(request: NextRequest, context: RouteContext<"/api/backend/[...path]">) {
@@ -59,5 +71,17 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/back
 }
 
 export async function POST(request: NextRequest, context: RouteContext<"/api/backend/[...path]">) {
+  return forward(request, (await context.params).path);
+}
+
+export async function PUT(request: NextRequest, context: RouteContext<"/api/backend/[...path]">) {
+  return forward(request, (await context.params).path);
+}
+
+export async function PATCH(request: NextRequest, context: RouteContext<"/api/backend/[...path]">) {
+  return forward(request, (await context.params).path);
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext<"/api/backend/[...path]">) {
   return forward(request, (await context.params).path);
 }

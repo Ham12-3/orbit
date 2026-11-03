@@ -2,15 +2,19 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "@/lib/api";
+import { api, apiBytes, encodePath } from "@/lib/api";
 import {
   TERMINAL_STATUSES,
   type Bot,
   type BotCreate,
+  type BotUpdate,
+  type MemoryFile,
+  type MemoryFileDetail,
   type Run,
   type RunEvent,
   type Thread,
   type ThreadDetail,
+  type WorkspaceListing,
 } from "@/lib/types";
 
 export const keys = {
@@ -21,6 +25,12 @@ export const keys = {
   threads: (botId: string) => ["threads", botId] as const,
   thread: (threadId: string) => ["thread", threadId] as const,
   run: (runId: string) => ["run", runId] as const,
+  memory: (botId: string) => ["memory", botId] as const,
+  memoryFile: (botId: string, path: string) => ["memory", botId, path] as const,
+  claudeMd: (botId: string) => ["claude-md", botId] as const,
+  files: (botId: string) => ["files", botId] as const,
+  fileContent: (botId: string, path: string, version: string) =>
+    ["file-content", botId, path, version] as const,
 };
 
 export function useBots() {
@@ -143,5 +153,110 @@ export function useCancelRun() {
           : Promise.resolve(),
       ]);
     },
+  });
+}
+
+export function useUpdateBot(bot: Bot) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BotUpdate) => api<Bot>(`/api/bots/${bot.id}`, { method: "PATCH", body }),
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(keys.bot(updated.slug), updated);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.bots }),
+        queryClient.invalidateQueries({ queryKey: keys.claudeMd(updated.id) }),
+      ]);
+    },
+  });
+}
+
+export function useClaudeMd(botId: string) {
+  return useQuery({
+    queryKey: keys.claudeMd(botId),
+    queryFn: () => api<{ content: string }>(`/api/bots/${botId}/claude-md`),
+  });
+}
+
+// ---- Memory ------------------------------------------------------------------------
+
+function memoryUrl(botId: string, path: string) {
+  return `/api/bots/${botId}/memory/${encodePath(path)}`;
+}
+
+export function useMemory(botId: string) {
+  return useQuery({
+    queryKey: keys.memory(botId),
+    queryFn: () => api<MemoryFile[]>(`/api/bots/${botId}/memory`),
+  });
+}
+
+export function useMemoryFile(botId: string, path: string | null) {
+  return useQuery({
+    queryKey: keys.memoryFile(botId, path ?? ""),
+    queryFn: () => api<MemoryFileDetail>(memoryUrl(botId, path ?? "")),
+    enabled: Boolean(path),
+  });
+}
+
+export function useSaveMemory(botId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, content }: { path: string; content: string }) =>
+      api<MemoryFileDetail>(memoryUrl(botId, path), { method: "PUT", body: { content } }),
+    onSuccess: async (file) => {
+      queryClient.setQueryData(keys.memoryFile(botId, file.path), file);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.memory(botId), exact: true }),
+        queryClient.invalidateQueries({ queryKey: keys.claudeMd(botId) }),
+      ]);
+    },
+  });
+}
+
+export function useDeleteMemory(botId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api<void>(memoryUrl(botId, path), { method: "DELETE" }),
+    onSuccess: async (_, path) => {
+      queryClient.removeQueries({ queryKey: keys.memoryFile(botId, path) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.memory(botId), exact: true }),
+        queryClient.invalidateQueries({ queryKey: keys.claudeMd(botId) }),
+      ]);
+    },
+  });
+}
+
+// ---- Workspace files ---------------------------------------------------------------
+
+export function fileUrl(botId: string, path: string) {
+  return `/api/bots/${botId}/files/content/${encodePath(path)}`;
+}
+
+export function useWorkspace(botId: string) {
+  return useQuery({
+    queryKey: keys.files(botId),
+    queryFn: () => api<WorkspaceListing>(`/api/bots/${botId}/files`),
+  });
+}
+
+export function useRefreshWorkspace(botId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<WorkspaceListing>(`/api/bots/${botId}/files?live=true`, { slow: true }),
+    onSuccess: (listing) => {
+      queryClient.setQueryData(keys.files(botId), listing);
+    },
+  });
+}
+
+/** `version` (the file's modified time) makes a changed file load again. */
+export function useFileContent(botId: string, path: string | null, version: string, enabled: boolean) {
+  return useQuery({
+    queryKey: keys.fileContent(botId, path ?? "", version),
+    queryFn: () => apiBytes(fileUrl(botId, path ?? "")),
+    enabled: Boolean(path) && enabled,
+    staleTime: Infinity,
+    retry: false,
   });
 }

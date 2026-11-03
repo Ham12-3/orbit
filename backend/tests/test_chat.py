@@ -11,6 +11,7 @@ from app.db import Database
 from app.events import RUN_REQUESTED
 from app.models import Run, Thread
 from app.runs.service import RunServices
+from app.sandboxes import layout
 from tests.conftest import AUTH, create_bot
 from tests.fakes import FakeSandboxProvider, FakeTitler, RecordingEvents
 
@@ -110,9 +111,14 @@ async def test_follow_up_messages_resume_the_agent_session(
     assert await services.claim(second, "wf-2")
     await services.start(second)
 
-    launches = sandboxes.sandboxes["sbx-1"].started
+    sandbox = sandboxes.sandboxes["sbx-1"]
+    launches = sandbox.started
     assert "ORBIT_RESUME_SESSION_ID" not in launches[0]["envs"]
     assert launches[1]["envs"]["ORBIT_RESUME_SESSION_ID"] == "sess-1"
+    # A copy of the conversation so far, used only if the session is gone from the sandbox.
+    history_file = launches[1]["envs"]["ORBIT_HISTORY_FILE"]
+    assert history_file == layout.history_path(uuid.UUID(second))
+    assert sandbox.files[history_file] == "Owner: Hello bot\n\nYou: Hi!"
 
 
 async def test_a_failed_run_still_answers_in_the_thread(

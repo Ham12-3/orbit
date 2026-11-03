@@ -5,7 +5,10 @@ import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { ChatPanel } from "@/components/bots/chat-panel";
+import { FilesPanel } from "@/components/bots/files-panel";
+import { MemoryPanel } from "@/components/bots/memory-panel";
 import { RunsPanel } from "@/components/bots/runs-panel";
+import { SettingsPanel } from "@/components/bots/settings-panel";
 import { ErrorNote } from "@/components/error-note";
 import { StatusBadge } from "@/components/status-badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -17,9 +20,6 @@ import { cn } from "@/lib/utils";
 
 const LATER_TABS = [
   { value: "routines", label: "Routines", phase: 5, what: "Schedules and event triggers" },
-  { value: "memory", label: "Memory", phase: 3, what: "Everything this bot remembers, editable" },
-  { value: "files", label: "Files", phase: 3, what: "A read-only view of the bot's workspace" },
-  { value: "settings", label: "Settings", phase: 4, what: "Tool policies, connections and budget" },
 ];
 
 export function BotView() {
@@ -70,6 +70,9 @@ export function BotView() {
                 {t.label}
               </TabsTrigger>
             ))}
+            <TabsTrigger value="memory">Memory</TabsTrigger>
+            <TabsTrigger value="files">Files</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="chat" className="pt-4">
@@ -77,6 +80,15 @@ export function BotView() {
         </TabsContent>
         <TabsContent value="runs" className="pt-4">
           <RunsPanel bot={bot.data} />
+        </TabsContent>
+        <TabsContent value="memory" className="pt-4">
+          <MemoryPanel bot={bot.data} />
+        </TabsContent>
+        <TabsContent value="files" className="pt-4">
+          <FilesPanel bot={bot.data} />
+        </TabsContent>
+        <TabsContent value="settings" className="pt-4">
+          <SettingsPanel bot={bot.data} />
         </TabsContent>
         {LATER_TABS.map((t) => (
           <TabsContent key={t.value} value={t.value} className="pt-4">

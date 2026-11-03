@@ -8,7 +8,7 @@ import inngest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import bots, health, me, runs, threads
+from app.api import bots, files, health, me, memory, runs, threads
 from app.background import drain
 from app.chat.titles import ClaudeTitleGenerator, TitleGenerator
 from app.config import Settings, get_settings
@@ -87,6 +87,8 @@ def create_app(
     app.include_router(health.router)
     app.include_router(me.router)
     app.include_router(bots.router)
+    app.include_router(memory.router)
+    app.include_router(files.router)
     app.include_router(threads.router)
     app.include_router(runs.router)
     app.include_router(internal.router)

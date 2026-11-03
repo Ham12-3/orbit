@@ -59,6 +59,38 @@ export interface BotCreate {
   daily_token_budget: number;
 }
 
+export type BotUpdate = Partial<BotCreate>;
+
+export type MemoryAuthor = "bot" | "user";
+// "push": edited here, reaches the bot's computer at the start of its next run.
+export type MemorySyncState = "synced" | "push" | "delete";
+
+export interface MemoryFile {
+  path: string;
+  updated_by: MemoryAuthor;
+  sync_state: MemorySyncState;
+  size: number;
+  updated_at: string;
+}
+
+export interface MemoryFileDetail extends MemoryFile {
+  content: string;
+}
+
+export interface FileEntry {
+  path: string;
+  kind: "file" | "dir" | "symlink";
+  size: number;
+  modified_at: string;
+  sha256: string | null;
+}
+
+export interface WorkspaceListing {
+  scanned_at: string | null;
+  truncated: boolean;
+  entries: FileEntry[];
+}
+
 export interface Run {
   id: string;
   bot_id: string;

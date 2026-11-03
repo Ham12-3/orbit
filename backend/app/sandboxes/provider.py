@@ -2,7 +2,10 @@
 
 import uuid
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime
+from typing import Literal, Protocol
+
+from pydantic import BaseModel
 
 
 class SandboxGoneError(Exception):
@@ -11,6 +14,30 @@ class SandboxGoneError(Exception):
 
 class SandboxUnavailableError(Exception):
     """Sandboxes cannot be used right now (not configured, or the provider failed)."""
+
+
+class SandboxFileNotFoundError(Exception):
+    """The path does not exist in the sandbox."""
+
+
+class SandboxCommandError(Exception):
+    """A helper command inside the sandbox failed."""
+
+
+class FileEntry(BaseModel):
+    path: str  # relative to the scanned folder, "/"-separated (absolute for stat())
+    kind: Literal["file", "dir", "symlink"]
+    size: int
+    modified_at: datetime  # scan_tree.py sends Unix seconds; Pydantic converts them
+    sha256: str | None = None
+
+
+class TreeScan(BaseModel):
+    """A folder listing from inside the sandbox (sandbox-template/scan_tree.py)."""
+
+    exists: bool
+    truncated: bool
+    entries: list[FileEntry]
 
 
 @dataclass(frozen=True)
@@ -39,6 +66,22 @@ class Sandbox(Protocol):
         ...
 
     async def exec(self, command: str, *, timeout_s: float = 60) -> CommandOutput: ...
+
+    async def scan_tree(self, root: str, *, max_entries: int, hash_max_bytes: int = 0) -> TreeScan:
+        """List everything under `root`, skipping symlinks. Raises SandboxCommandError."""
+        ...
+
+    async def stat(self, path: str) -> FileEntry:
+        """Does not follow a final symlink. Raises SandboxFileNotFoundError."""
+        ...
+
+    async def read_bytes(self, path: str) -> bytes:
+        """Raises SandboxFileNotFoundError."""
+        ...
+
+    async def remove(self, path: str) -> None:
+        """Delete a file. A missing file is not an error."""
+        ...
 
 
 class SandboxProvider(Protocol):

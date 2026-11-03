@@ -1,10 +1,20 @@
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.llm_proxy.pricing import SUPPORTED_MODELS
 from app.models.enums import BotStatus, RunStatus
+
+
+def _known_model(value: str | None) -> str | None:
+    if value is not None and value not in SUPPORTED_MODELS:
+        raise ValueError(f"model must be one of {sorted(SUPPORTED_MODELS)}")
+    return value
+
+
+ModelName = Annotated[str | None, AfterValidator(_known_model)]
 
 
 class BotCreate(BaseModel):
@@ -14,16 +24,23 @@ class BotCreate(BaseModel):
     avatar_emoji: str = Field(default="🤖", min_length=1, max_length=16)
     job_description: str = Field(min_length=1, max_length=4000)
     instructions: str = Field(default="", max_length=20_000)
-    model: str | None = None
+    model: ModelName = None
     max_turns_per_run: int | None = Field(default=None, ge=1, le=500)
     daily_token_budget: int | None = Field(default=None, ge=1_000)
 
-    @field_validator("model")
-    @classmethod
-    def _known_model(cls, value: str | None) -> str | None:
-        if value is not None and value not in SUPPORTED_MODELS:
-            raise ValueError(f"model must be one of {sorted(SUPPORTED_MODELS)}")
-        return value
+
+class BotUpdate(BaseModel):
+    """Fields to change. They reach the bot's CLAUDE.md at the start of its next run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    avatar_emoji: str | None = Field(default=None, min_length=1, max_length=16)
+    job_description: str | None = Field(default=None, min_length=1, max_length=4000)
+    instructions: str | None = Field(default=None, max_length=20_000)
+    model: ModelName = None
+    max_turns_per_run: int | None = Field(default=None, ge=1, le=500)
+    daily_token_budget: int | None = Field(default=None, ge=1_000)
 
 
 class BotRead(BaseModel):

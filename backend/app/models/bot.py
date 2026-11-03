@@ -1,6 +1,8 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import BigInteger, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -26,3 +28,6 @@ class Bot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # The run currently holding this bot's sandbox (one at a time). Not a FK: it is a
     # lock pointer, and a FK here would make bots <-> runs a cycle.
     active_run_id: Mapped[uuid.UUID | None]
+    # What `workspace/` held when the last run ended (app.sandboxes.provider.TreeScan as
+    # JSON). Only runs change the workspace, so this is current whenever the bot is idle.
+    workspace_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

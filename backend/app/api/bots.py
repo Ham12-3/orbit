@@ -12,8 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUserDep, RunServicesDep, SessionDep, SettingsDep
 from app.llm_proxy.metering import utc_day_start
-from app.models import Bot, LlmUsage, Run
-from app.schemas.bots import BotCreate, BotRead
+from app.models import Bot, LlmUsage, MemoryFile, Run
+from app.models.enums import MemorySyncState
+from app.sandboxes.layout import render_claude_md
+from app.schemas.bots import BotCreate, BotRead, BotUpdate
+from app.schemas.files import ClaudeMdRead
 from app.schemas.runs import RunCreate, RunRead
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
@@ -60,6 +63,35 @@ async def get_bot_by_slug(slug: str, user: CurrentUserDep, session: SessionDep) 
 async def get_bot(bot_id: uuid.UUID, user: CurrentUserDep, session: SessionDep) -> BotRead:
     bot = await get_owned_bot(session, user.id, bot_id)
     return (await _with_stats(session, [bot]))[0]
+
+
+@router.patch("/{bot_id}")
+async def update_bot(
+    bot_id: uuid.UUID, body: BotUpdate, user: CurrentUserDep, session: SessionDep
+) -> BotRead:
+    """The slug stays the same on rename, so links keep working."""
+    bot = await get_owned_bot(session, user.id, bot_id)
+    for field, value in body.model_dump(exclude_unset=True).items():
+        if value is None or (field in ("name", "job_description") and not value.strip()):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{field} can't be empty")
+        setattr(bot, field, value.strip() if field in ("name", "job_description") else value)
+    await session.commit()
+    await session.refresh(bot)
+    return (await _with_stats(session, [bot]))[0]
+
+
+@router.get("/{bot_id}/claude-md")
+async def get_claude_md(
+    bot_id: uuid.UUID, user: CurrentUserDep, session: SessionDep
+) -> ClaudeMdRead:
+    """What the bot reads at the start of its next run (its config plus memory)."""
+    bot = await get_owned_bot(session, user.id, bot_id)
+    memory = await session.scalars(
+        select(MemoryFile).where(
+            MemoryFile.bot_id == bot.id, MemoryFile.sync_state != MemorySyncState.DELETE
+        )
+    )
+    return ClaudeMdRead(content=render_claude_md(bot, list(memory)))
 
 
 @router.get("/{bot_id}/runs")

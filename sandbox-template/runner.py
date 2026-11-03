@@ -18,7 +18,7 @@ import os
 import sys
 from collections import deque
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ from claude_agent_sdk import (
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
+    get_session_info,
     query,
 )
 
@@ -91,9 +92,12 @@ class RunnerConfig:
     prompt: str
     bot_home: str
     resume_session_id: str | None = None
+    # The thread's recent messages, used only if the session to resume is not on this computer.
+    history: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> RunnerConfig:
+        history_file = env.get("ORBIT_HISTORY_FILE")
         return cls(
             run_id=env["ORBIT_RUN_ID"],
             api_url=env["ORBIT_API_URL"].rstrip("/"),
@@ -104,6 +108,7 @@ class RunnerConfig:
             prompt=Path(env["ORBIT_PROMPT_FILE"]).read_text(encoding="utf-8"),
             bot_home=env["ORBIT_BOT_HOME"],
             resume_session_id=env.get("ORBIT_RESUME_SESSION_ID") or None,
+            history=Path(history_file).read_text(encoding="utf-8") if history_file else None,
         )
 
 
@@ -154,6 +159,28 @@ def build_options(
         resume=config.resume_session_id,
         stderr=stderr,
     )
+
+
+def prompt_with_history(history: str, prompt: str) -> str:
+    return (
+        "Your earlier conversation in this chat could not be restored on this computer, so "
+        "here are its most recent messages, oldest first:\n\n"
+        f"<conversation>\n{history}\n</conversation>\n\n"
+        f"Your owner's new message:\n\n{prompt}"
+    )
+
+
+def without_lost_session(
+    config: RunnerConfig,
+    find_session: Callable[[str, str], object | None] = get_session_info,
+) -> tuple[RunnerConfig, bool]:
+    """Sessions live on the sandbox's disk. If the sandbox was replaced, start a new one."""
+    if config.resume_session_id is None:
+        return config, False
+    if find_session(config.resume_session_id, config.bot_home) is not None:
+        return config, False
+    prompt = prompt_with_history(config.history, config.prompt) if config.history else config.prompt
+    return replace(config, resume_session_id=None, prompt=prompt), True
 
 
 def remove_project_settings(bot_home: str) -> None:
@@ -345,6 +372,15 @@ async def run(config: RunnerConfig) -> int:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         reporter = Reporter(config, client)
         reporter.start()
+        config, lost = without_lost_session(config)
+        if lost:
+            reporter.event(
+                "status",
+                {
+                    "message": "The earlier conversation is not on this computer any more; "
+                    "continuing from a copy of the recent messages."
+                },
+            )
         result: ResultMessage | None = None
         error: str | None = None
         stderr = StderrTail()

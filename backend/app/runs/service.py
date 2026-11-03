@@ -17,13 +17,22 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.run_tokens import issue_run_token, revoke_run_tokens
+from app.chat.history import recent_history
 from app.chat.replies import ensure_bot_reply
 from app.config import Settings
 from app.db import Database
 from app.events import RUN_FINISHED, RUN_REQUESTED, EventSender
 from app.llm_proxy.metering import tokens_used_today
-from app.models import Bot, Run, Thread
-from app.models.enums import TERMINAL_RUN_STATUSES, BotStatus, RunEventType, RunStatus, RunTrigger
+from app.memory.sync import pull_memory, push_memory
+from app.models import Bot, MemoryFile, Run, Thread
+from app.models.enums import (
+    TERMINAL_RUN_STATUSES,
+    BotStatus,
+    MemorySyncState,
+    RunEventType,
+    RunStatus,
+    RunTrigger,
+)
 from app.runs.timeline import add_system_event
 from app.sandboxes import layout
 from app.sandboxes.provider import Sandbox, SandboxGoneError, SandboxProvider
@@ -35,6 +44,8 @@ STARTED = (RunStatus.STARTING, RunStatus.RUNNING)
 STALE_GRACE = timedelta(minutes=10)
 QUEUE_DISPATCH_DELAY = timedelta(seconds=30)
 SANDBOX_CALL_TIMEOUT_S = 90
+SANDBOX_SAVE_TIMEOUT_S = 60
+WORKSPACE_SCAN_MAX_ENTRIES = 2000
 
 
 class ConfigurationError(Exception):
@@ -131,8 +142,23 @@ class RunServices:
 
             sandbox = await self._open_sandbox(s, bot, rid)
             await sandbox.make_dirs(layout.WORKSPACE_DIR, layout.MEMORY_DIR, layout.run_dir(rid))
-            await sandbox.write_text(layout.CLAUDE_MD_PATH, layout.render_claude_md(bot))
+            pushed = await push_memory(s, sandbox, bot.id)
+            if note := pushed.summary():
+                add_system_event(s, rid, RunEventType.STATUS, note)
+            memory = await s.scalars(
+                select(MemoryFile).where(
+                    MemoryFile.bot_id == bot.id, MemoryFile.sync_state != MemorySyncState.DELETE
+                )
+            )
+            await sandbox.write_text(
+                layout.CLAUDE_MD_PATH, layout.render_claude_md(bot, list(memory))
+            )
             await sandbox.write_text(layout.prompt_path(rid), run.input_prompt)
+            # Read now, not at enqueue: the previous turn may have just finished.
+            resume_session_id = await self._thread_session(s, run)
+            if resume_session_id and run.thread_id:
+                history = await recent_history(s, run.thread_id, current_run_id=rid)
+                await sandbox.write_text(layout.history_path(rid), history)
             await sandbox.write_text(
                 layout.RUNNER_SCRIPT,
                 self.settings.runner_script_path.read_text(encoding="utf-8"),
@@ -162,8 +188,8 @@ class RunServices:
                     bot=bot,
                     run_id=rid,
                     run_token=token,
-                    # Read now, not at enqueue: the previous turn may have just finished.
-                    resume_session_id=await self._thread_session(s, run),
+                    resume_session_id=resume_session_id,
+                    has_history=bool(resume_session_id),
                 ),
                 cwd=layout.BOT_HOME,
             )
@@ -302,7 +328,7 @@ class RunServices:
             await s.commit()
 
             if run.sandbox_id:
-                await self._stop_sandbox(run.sandbox_id, rid)
+                await self._stop_sandbox(run.sandbox_id, run_id=rid, bot_id=run.bot_id)
 
             await s.refresh(run)
             await ensure_bot_reply(s, run)  # normally already written by _finish
@@ -455,12 +481,17 @@ class RunServices:
             .limit(1)
         )
 
-    async def _stop_sandbox(self, sandbox_id: str, run_id: uuid.UUID) -> None:
-        """Best effort. If this fails, the sandbox still auto-pauses at its timeout."""
+    async def _stop_sandbox(self, sandbox_id: str, *, run_id: uuid.UUID, bot_id: uuid.UUID) -> None:
+        """Stop the runner, save memory and the workspace listing, pause.
+
+        Best effort. If this fails, the sandbox still auto-pauses at its timeout.
+        """
         try:
             async with asyncio.timeout(SANDBOX_CALL_TIMEOUT_S):
                 sandbox = await self.sandboxes.connect(sandbox_id, timeout_s=300)
                 await sandbox.kill_run_processes(run_id)
+            await self._save_sandbox_state(sandbox, run_id=run_id, bot_id=bot_id)
+            async with asyncio.timeout(SANDBOX_CALL_TIMEOUT_S):
                 await self.sandboxes.pause(sandbox_id)
         except SandboxGoneError:
             pass
@@ -468,6 +499,41 @@ class RunServices:
             logger.warning(
                 "Could not pause sandbox %s after run %s", sandbox_id, run_id, exc_info=True
             )
+
+    async def _save_sandbox_state(
+        self, sandbox: Sandbox, *, run_id: uuid.UUID, bot_id: uuid.UUID
+    ) -> None:
+        """Copy memory/ into the database and record what workspace/ holds. Never raises."""
+        try:
+            async with asyncio.timeout(SANDBOX_SAVE_TIMEOUT_S), self.db.session() as s:
+                pulled = await pull_memory(s, sandbox, bot_id)
+                if note := pulled.summary():
+                    add_system_event(s, run_id, RunEventType.STATUS, note)
+                scan = await sandbox.scan_tree(
+                    layout.WORKSPACE_DIR, max_entries=WORKSPACE_SCAN_MAX_ENTRIES
+                )
+                await s.execute(
+                    update(Bot)
+                    .where(Bot.id == bot_id)
+                    .values(
+                        workspace_snapshot={
+                            **scan.model_dump(mode="json"),
+                            "scanned_at": utcnow().isoformat(),
+                        }
+                    )
+                )
+                await s.commit()
+        except Exception:
+            logger.warning("Could not save memory after run %s", run_id, exc_info=True)
+            async with self.db.session() as s:
+                add_system_event(
+                    s,
+                    run_id,
+                    RunEventType.ERROR,
+                    "Could not save the bot's memory after this run; it is still on its "
+                    "computer and will be saved after the next run.",
+                )
+                await s.commit()
 
     async def _kill_runner_quietly(self, run: Run) -> None:
         if not run.sandbox_id:

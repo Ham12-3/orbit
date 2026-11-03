@@ -1,8 +1,11 @@
 """Unit tests for sandbox-template/runner.py (on the pytest path via pyproject)."""
 
+import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
+import pytest
 import runner
 from claude_agent_sdk import (
     AssistantMessage,
@@ -191,3 +194,54 @@ def test_crash_report_includes_what_claude_code_printed() -> None:
         "exiting",
     ]
     assert len(runner.crash_report(RuntimeError("x" * 50_000), "")) == runner.MAX_ERROR_CHARS
+
+
+def test_config_reads_the_history_file(tmp_path: Path) -> None:
+    history = tmp_path / "history.txt"
+    history.write_text("Owner: hi\n\nYou: hello", encoding="utf-8")
+    env = {
+        "ORBIT_RUN_ID": "run-1",
+        "ORBIT_API_URL": "https://orbit.example.test",
+        "ORBIT_RUN_TOKEN": "tok",
+        "ORBIT_MODEL": "claude-sonnet-5-5",
+        "ORBIT_BACKGROUND_MODEL": "claude-haiku-5-5",
+        "ORBIT_MAX_TURNS": "7",
+        "ORBIT_PROMPT_FILE": str(history),
+        "ORBIT_BOT_HOME": str(tmp_path),
+        "ORBIT_RESUME_SESSION_ID": "sess-1",
+        "ORBIT_HISTORY_FILE": str(history),
+    }
+    config = runner.RunnerConfig.from_env(env)
+    assert config.history == "Owner: hi\n\nYou: hello"
+    assert _config(tmp_path).history is None
+
+
+def test_a_session_on_this_computer_is_resumed(tmp_path: Path) -> None:
+    config = replace(_config(tmp_path), resume_session_id="sess-1", history="Owner: hi")
+    assert runner.without_lost_session(config, lambda _id, _dir: object()) == (config, False)
+
+
+def test_a_lost_session_continues_from_the_recent_messages(tmp_path: Path) -> None:
+    looked_up: list[tuple[str, str]] = []
+
+    def find(session_id: str, directory: str) -> None:
+        looked_up.append((session_id, directory))
+
+    config = replace(_config(tmp_path), resume_session_id="sess-1", history="Owner: hi")
+    fresh, lost = runner.without_lost_session(config, find)
+
+    assert lost
+    assert looked_up == [("sess-1", str(tmp_path))]
+    assert fresh.resume_session_id is None
+    assert "<conversation>\nOwner: hi\n</conversation>" in fresh.prompt
+    assert fresh.prompt.endswith("Your owner's new message:\n\nWrite hello.txt")
+
+
+def test_the_real_session_lookup_reports_a_missing_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    config = replace(_config(tmp_path), resume_session_id=str(uuid.uuid4()))
+    fresh, lost = runner.without_lost_session(config)
+    assert lost
+    assert fresh.prompt == "Write hello.txt"  # no history to add

@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     # Pushed into the sandbox at every run start, so runner fixes reach existing bots
     # (template changes only reach sandboxes created after the rebuild).
     runner_script_path: Path = REPO_ROOT / "sandbox-template" / "runner.py"
+    scan_script_path: Path = REPO_ROOT / "sandbox-template" / "scan_tree.py"
     e2b_request_timeout_s: float = 60.0
     # "filesystem" drops RAM on pause (each run starts a fresh runner anyway).
     sandbox_pause_mode: Literal["filesystem", "full"] = "filesystem"

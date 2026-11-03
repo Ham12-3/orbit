@@ -1,16 +1,30 @@
 """In-memory stand-ins for E2B and Inngest."""
 
+import hashlib
 import itertools
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
-from app.sandboxes.provider import CommandOutput, SandboxGoneError
+from app.sandboxes.provider import (
+    CommandOutput,
+    FileEntry,
+    SandboxFileNotFoundError,
+    SandboxGoneError,
+    TreeScan,
+)
+
+FIXED_TIME = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
 
 
 class FakeSandbox:
     def __init__(self, sandbox_id: str) -> None:
         self._sandbox_id = sandbox_id
         self.files: dict[str, str] = {}
+        self.blobs: dict[str, bytes] = {}  # binary files
+        self.symlinks: set[str] = set()
+        self.removed: list[str] = []
+        self.reads: list[str] = []
         self.root_files: set[str] = set()
         self.dirs: set[str] = set()
         self.started: list[dict[str, Any]] = []
@@ -47,6 +61,60 @@ class FakeSandbox:
 
     async def exec(self, command: str, *, timeout_s: float = 60) -> CommandOutput:
         return CommandOutput(exit_code=0, stdout="", stderr="")
+
+    def _data(self) -> dict[str, bytes]:
+        return {**{p: c.encode("utf-8") for p, c in self.files.items()}, **self.blobs}
+
+    async def scan_tree(self, root: str, *, max_entries: int, hash_max_bytes: int = 0) -> TreeScan:
+        prefix = f"{root}/"
+        files = {
+            path[len(prefix) :]: data
+            for path, data in self._data().items()
+            if path.startswith(prefix) and path not in self.symlinks
+        }
+        exists = root in self.dirs or bool(files)
+        dirs = {
+            "/".join(path.split("/")[:depth])
+            for path in files
+            for depth in range(1, path.count("/") + 1)
+        }
+        entries = [
+            FileEntry(path=d, kind="dir", size=0, modified_at=FIXED_TIME) for d in sorted(dirs)
+        ] + [
+            FileEntry(
+                path=path,
+                kind="file",
+                size=len(data),
+                modified_at=FIXED_TIME,
+                sha256=hashlib.sha256(data).hexdigest() if len(data) <= hash_max_bytes else None,
+            )
+            for path, data in sorted(files.items())
+        ]
+        return TreeScan(
+            exists=exists, truncated=len(entries) > max_entries, entries=entries[:max_entries]
+        )
+
+    async def stat(self, path: str) -> FileEntry:
+        data = self._data()
+        if path in self.symlinks:
+            return FileEntry(path=path, kind="symlink", size=0, modified_at=FIXED_TIME)
+        if path in data:
+            return FileEntry(path=path, kind="file", size=len(data[path]), modified_at=FIXED_TIME)
+        if path in self.dirs or any(p.startswith(f"{path}/") for p in data):
+            return FileEntry(path=path, kind="dir", size=0, modified_at=FIXED_TIME)
+        raise SandboxFileNotFoundError(path)
+
+    async def read_bytes(self, path: str) -> bytes:
+        self.reads.append(path)
+        data = self._data()
+        if path not in data:
+            raise SandboxFileNotFoundError(path)
+        return data[path]
+
+    async def remove(self, path: str) -> None:
+        self.removed.append(path)
+        self.files.pop(path, None)
+        self.blobs.pop(path, None)
 
 
 class FakeSandboxProvider:

@@ -104,3 +104,44 @@ async def test_bot_list_shows_last_run_and_todays_cost(client: AsyncClient, db: 
     assert by_slug["id"] == bot["id"]
     runs = (await client.get(f"/api/bots/{bot['id']}/runs", headers=AUTH)).json()
     assert [r["id"] for r in runs] == [run["id"]]
+
+
+async def test_editing_a_bot_keeps_its_slug(client: AsyncClient) -> None:
+    bot = await create_bot(client, name="Researcher", instructions="Be brief.")
+    response = await client.patch(
+        f"/api/bots/{bot['id']}",
+        json={
+            "name": "  Analyst ",
+            "instructions": "Use bullet points.",
+            "model": "claude-opus-5-5",
+        },
+        headers=AUTH,
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert (updated["name"], updated["slug"]) == ("Analyst", bot["slug"])
+    assert updated["instructions"] == "Use bullet points."
+    assert updated["model"] == "claude-opus-5-5"
+    assert updated["job_description"] == bot["job_description"]  # untouched
+
+
+async def test_bot_edits_are_validated(client: AsyncClient) -> None:
+    bot = await create_bot(client)
+    for body in [{"model": "gpt-5"}, {"name": None}, {"name": ""}, {"sandbox_id": "x"}]:
+        response = await client.patch(f"/api/bots/{bot['id']}", json=body, headers=AUTH)
+        assert response.status_code == 422, body
+
+
+async def test_claude_md_preview_shows_config_and_memory(client: AsyncClient) -> None:
+    bot = await create_bot(client, name="Scout", instructions="Answer in French.")
+    await client.put(
+        f"/api/bots/{bot['id']}/memory/preferences.md",
+        json={"content": "- Short bullet summaries"},
+        headers=AUTH,
+    )
+    response = await client.get(f"/api/bots/{bot['id']}/claude-md", headers=AUTH)
+    content = response.json()["content"]
+    assert content.startswith("# Scout")
+    assert "Answer in French." in content
+    assert "### memory/preferences.md (last edited by your owner)" in content
+    assert "- Short bullet summaries" in content

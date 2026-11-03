@@ -6,17 +6,14 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
+import { EmojiPicker, ModelSelect } from "@/components/bots/bot-fields";
 import { ErrorNote } from "@/components/error-note";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreateBot } from "@/lib/queries";
-import { MODELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const EMOJIS = ["🤖", "🔎", "✍️", "📬", "📅", "📈", "🧹", "🛠️"];
 
 export function NewBotForm() {
   const router = useRouter();
@@ -57,25 +54,7 @@ export function NewBotForm() {
       </div>
 
       <form onSubmit={onSubmit} className="space-y-6">
-        <div className="space-y-2">
-          <Label>Avatar</Label>
-          <div className="flex flex-wrap gap-2">
-            {EMOJIS.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setEmoji(option)}
-                aria-pressed={emoji === option}
-                className={cn(
-                  "flex size-10 items-center justify-center rounded-lg border text-xl transition-colors",
-                  emoji === option ? "border-foreground bg-muted" : "hover:bg-muted",
-                )}
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-        </div>
+        <EmojiPicker value={emoji} onChange={setEmoji} />
 
         <div className="space-y-2">
           <Label htmlFor="name">Name</Label>
@@ -108,21 +87,7 @@ export function NewBotForm() {
           <p className="text-xs text-muted-foreground">Optional. The bot reads this before every task.</p>
         </div>
 
-        <div className="space-y-2">
-          <Label>Model</Label>
-          <Select value={model} onValueChange={(value) => value && setModel(value)} items={MODELS}>
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(MODELS).map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <ModelSelect value={model} onChange={setModel} />
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">

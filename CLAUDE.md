@@ -5,9 +5,12 @@ Claude Agent SDK inside it, connects to the user's apps, runs on schedules and e
 it learns, and asks for approval before risky actions. The full spec is in [SPEC.md](SPEC.md); build
 phases are in section 10 of it.
 
-**Status:** Phase 2 (dashboard, chat with session resume, live run timelines) done, in single-user
-mode (no sign-in; Supabase was dropped at the user's request). Verified in the browser: create a bot,
-chat across three messages (it remembered), live tool calls, run page. Next: Phase 3 (memory, files).
+**Status:** Phase 3 (memory and files) done, in single-user mode (no sign-in; Supabase was dropped
+at the user's request). Verified live: a bot saved "I prefer short bullet summaries" to
+`memory/preferences.md`, a new thread answered in bullets, editing that note in the Memory tab
+switched the next new thread to a paragraph; Files tab listed and previewed workspace files; a
+killed sandbox was replaced with memory restored and the chat continued. Next: Phase 4 (app
+connections and approvals).
 
 ## Run it
 
@@ -40,6 +43,12 @@ Dashboard API (`Authorization: Bearer $LOCAL_API_TOKEN`; the web app adds it ser
   `POST /api/threads/{id}/messages {"content"}`
 - runs: `GET /api/runs/{id}` (with events), `POST /api/runs/{id}/cancel`,
   `GET /api/runs/{id}/stream[?after=N]` (SSE; also honours `Last-Event-ID`)
+- bot settings: `PATCH /api/bots/{id}` (name, emoji, job, instructions, model, budget, max turns;
+  slug never changes), `GET /api/bots/{id}/claude-md` (what the bot reads next run)
+- memory: `GET /api/bots/{id}/memory`, `GET|PUT|DELETE /api/bots/{id}/memory/{path}`
+  (PUT `{"content"}`; changes reach the sandbox at the next run start)
+- files (read-only workspace): `GET /api/bots/{id}/files[?live=true]`,
+  `GET /api/bots/{id}/files/content/{path}` (bytes, always as a download)
 
 Other targets: `make test`, `make test-e2b` (live, needs keys + template), `make try-run`,
 `make tunnel-setup`, `make lint`, `make fmt`,
@@ -74,8 +83,10 @@ backend/                  FastAPI control plane (uv, Python 3.12)
     models/               bots, runs, run_events, run_tokens, llm_usage; enums as checked VARCHARs
     schemas/              Pydantic request/response models
     auth/run_tokens.py    issue / verify / revoke run tokens (JWT + stored SHA-256)
-    api/                  dashboard routes (me, bots, threads, runs, health); deps.py: auth + deps
-    chat/                 bot replies for finished chat runs, thread titles (Haiku)
+    api/                  dashboard routes (me, bots, memory, files, threads, runs, health);
+                          deps.py: auth + deps
+    chat/                 bot replies, thread titles (Haiku), history copy for lost sessions
+    memory/               memory path rules; sync.py: push_memory (run start), pull_memory (end)
     background.py         spawn()/drain() for fire-and-forget tasks (usage writes, titles)
     internal/             runner callbacks: /internal/runs/{id}/events and /complete
     llm_proxy/            /llm/v1/messages (+count_tokens): auth, budget, forward, meter, pricing
@@ -85,7 +96,8 @@ backend/                  FastAPI control plane (uv, Python 3.12)
     sandboxes/            provider protocol, E2B implementation, in-sandbox layout + CLAUDE.md
     workflows/            Inngest client, execute-run workflow, sweeper cron, ping
   tests/                  fakes.py has FakeSandboxProvider + RecordingEvents
-sandbox-template/         E2B template (template.py, build.py) and runner.py (runs in the sandbox)
+sandbox-template/         E2B template (template.py, build.py), runner.py (runs in the sandbox),
+                          scan_tree.py (folder listing, sent with `python -c`)
 frontend/                 Next.js 16 App Router, TS strict, Tailwind v4, shadcn/ui (Base UI)
   app/api/backend/[...path]/route.ts  forwards /api/backend/* to the backend's /api/* and adds
                           the API token server-side (also pipes the SSE stream)
@@ -95,8 +107,8 @@ frontend/                 Next.js 16 App Router, TS strict, Tailwind v4, shadcn/
                           Query), use-run-stream.ts, types.ts (mirror backend schemas)
 ```
 
-Section 8 packages not yet created (`tool_gateway/`, `memory/`, `notifications/`) arrive with the
-phase that first puts code in them.
+Section 8 packages not yet created (`tool_gateway/`, `notifications/`) arrive with the phase that
+first puts code in them.
 
 Frontend rules: data comes from the API via TanStack Query hooks in `lib/queries.ts`; types in
 `lib/types.ts` mirror the backend schemas. Under Cache Components, client components that read
@@ -208,8 +220,37 @@ view; the header wraps its active-link). shadcn here is Base UI: no `asChild`; s
   "inspect" URL requires the owner's login.
 - **run_events** use a bigint identity id (total order, future SSE cursor) and a nullable runner
   `seq` (unique per run, for idempotent retries). Server-written status events have no seq.
-- **Bot identity:** `CLAUDE.md` is rendered from the bot's config and rewritten at every run start
-  (`sandboxes/layout.py`), so it is always current. Phase 3 adds memory sync.
+- **Bot identity:** `CLAUDE.md` is rendered from the bot's config plus its memory and rewritten at
+  every run start (`sandboxes/layout.py`). That is how "regenerate on config change" is met: an
+  edit applies from the next run, without waking a paused sandbox. The memory files are inlined
+  (24k chars max; longer ones are listed by name), so a new thread starts with them in context
+  instead of depending on the agent choosing to read `memory/`.
+- **Memory sync** (`memory/sync.py`). `memory_files` mirrors `bot/memory/` (UTF-8 text, 64 KB per
+  file, 200 files, safe relative names). `sync_state`: `synced`, `push` (user edit), `delete`
+  (user delete). Run start (`push_memory`, before the runner): write `push` rows, remove `delete`
+  rows, and write any `synced` row whose file is missing, which restores memory into a
+  replacement sandbox. Run end (`pull_memory`, in finalize after the runner is killed, before
+  pause): list `memory/` with SHA-256s in one command, read only changed files, upsert as `bot`,
+  and forget rows whose file the bot deleted. User edits win: rows not `synced` are never
+  overwritten, and every write is a conditional UPDATE/INSERT/DELETE keyed on the hash it read.
+  A missing `memory/` folder is never read as "forget everything". Failures add a timeline note
+  and never fail the run; the sandbox is still paused.
+- **Files tab.** Only runs change `workspace/`, so finalize stores a listing
+  (`bots.workspace_snapshot`) and browsing never wakes the sandbox. Opening a file (or
+  `?live=true`) does: `connect(timeout=300)` resumes it and it auto-pauses again (E2B only ever
+  extends a running sandbox's timeout, so this never cuts a run short). Reads use the sandbox's
+  normal user, refuse symlinks and `..`, cap at 10 MB, and are served as
+  `application/octet-stream` + `attachment` + `nosniff` + `CSP: sandbox`, because the bytes are
+  untrusted (e.g. HTML the bot saved). The UI previews text, Markdown and images (as data URLs)
+  from the fetched bytes.
+- **Folder listings run `sandbox-template/scan_tree.py` via `python -c`** (one command instead of
+  one E2B call per file; not installed in the template, so it reaches existing sandboxes). It
+  skips symlinks and does not descend into `.git`, `node_modules` and similar.
+- **Lost agent sessions.** Sessions live on the sandbox disk. For chat follow-ups the backend
+  also writes `history.txt` (the thread's last 20 messages, 12k chars) and passes
+  `ORBIT_HISTORY_FILE`. The runner checks `get_session_info(id, directory=bot_home)`; if the
+  session is not there (sandbox replaced) it starts a new session with that history in the
+  prompt and says so on the timeline, instead of failing.
 - **App factory, no import-time side effects.** Tests inject fakes for E2B, events and the upstream.
 - **Inngest mode is explicit** (`is_production = not settings.inngest_dev`).
 - **Alembic URL comes from Settings**; `alembic -x db=test upgrade head` targets the test DB.
@@ -223,8 +264,13 @@ view; the header wraps its active-link). shadcn here is Base UI: no `asChild`; s
   short-lived, scoped to one run, revoked at the end, only buys budget-capped LLM calls and event
   writes for that run. Full fix (run the CLI as a second user) is a Phase 8 candidate.
 - No rate limiting on public endpoints yet (spec section 7); planned for Phase 8.
-- If a bot's sandbox is replaced, its threads' Agent SDK sessions are gone and resuming fails; the
-  run errors out. Phase 3/8: detect and start a fresh session.
+- If a bot's sandbox is replaced, chat threads continue from a copy of the recent messages
+  (not the full session: tool results and older turns are gone). Memory is restored from the DB.
+  Workspace files are lost with the sandbox (no backup yet; Phase 8 candidate).
+- If a bot writes memory and `pull_memory` fails, the change stays only on its computer until
+  the next successful run end; if the bot deletes a memory file and that save fails, the next
+  run start restores it from the DB.
+- Opening a workspace file resumes a paused sandbox for up to 5 minutes (a little E2B time).
 - Thread titles call the Anthropic API outside any bot budget (tiny, Haiku).
 - The Inngest Dev Server loses in-flight runs on restart; the sweeper cleans up within ~10 minutes
   after the run's deadline. Inngest Cloud in production does not have this problem.
@@ -234,7 +280,7 @@ view; the header wraps its active-link). shadcn here is Base UI: no `asChild`; s
 - Bots created before a template rebuild keep their old sandbox. There is no "recreate sandbox"
   action yet (Phase 8 candidate); for now create a new bot.
 
-## Library notes (verified 2026-11-02)
+## Library notes (verified 2026-11-02, Phase 3 additions 2026-11-03)
 
 - claude-agent-sdk 0.2.176: `query(prompt=, options=ClaudeAgentOptions(...))`; messages
   `AssistantMessage` (TextBlock / ThinkingBlock / ToolUseBlock), `UserMessage` (ToolResultBlock),
@@ -246,6 +292,13 @@ view; the header wraps its active-link). shadcn here is Base UI: no `asChild`; s
   `commands.list()`, `files.write/make_dir`. Template: `Template().from_python_image("3.12")
   .apt_install([...]).run_cmd([...], user="root").copy(src, dest, user=, mode=)`;
   `Template.build(template, name, cpu_count=, memory_mb=)`. Hobby: 1 h max continuous runtime.
+- e2b file ops: `files.list(path, depth=)` (recursive), `files.read(path, format="bytes")`,
+  `files.get_info` (`type` file/dir/symlink, `symlink_target`), `files.remove`; `files.write`
+  creates parent folders. Missing paths raise `FileNotFoundException`. `connect(timeout=)` only
+  extends a running sandbox's timeout, and the `on_timeout: pause` lifecycle survives a resume
+  (checked live with `AsyncSandbox.get_info`).
+- claude-agent-sdk `get_session_info(session_id, directory=)` returns None when the session file
+  is not on this machine (sessions live under `~/.claude/projects/`).
 - inngest (Python) 0.5.19: `create_function(fn_id=, trigger=, retries=, on_failure=)`;
   `ctx.step.run(id, fn, *args)`, `ctx.step.wait_for_event(id, event=, if_exp=, timeout=)` (None on
   timeout), `ctx.step.send_event(id, events)`, `TriggerCron(cron=)`, `NonRetriableError`.

@@ -45,6 +45,19 @@ class MessageRole(StrEnum):
     BOT = "bot"
 
 
+class MemoryAuthor(StrEnum):
+    BOT = "bot"
+    USER = "user"
+
+
+class MemorySyncState(StrEnum):
+    """Where a memory file stands relative to the bot's sandbox."""
+
+    SYNCED = "synced"  # the sandbox has this content (or newer, written by the bot)
+    PUSH = "push"  # edited by the user; written into the sandbox at the next run start
+    DELETE = "delete"  # deleted by the user; removed from the sandbox at the next run start
+
+
 class RunEventType(StrEnum):
     TEXT = "text"
     TOOL_USE = "tool_use"
