@@ -5,6 +5,7 @@ description = "Orbit control plane: dashboard API, LLM proxy, tool gateway and r
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.1",
+    "anthropic>=2.4.0",
     "asyncpg>=0.32.0",
     "e2b>=2.62.0",
     "fastapi>=0.162.0",
@@ -12,7 +13,7 @@ dependencies = [
     "inngest>=0.5.19",
     "pydantic>=2.14.2",
     "pydantic-settings>=2.16.2",
-    "pyjwt>=2.15.1",
+    "pyjwt[crypto]>=2.15.1",
     "sqlalchemy[asyncio]>=2.1.6",
     "uvicorn[standard]>=0.54.0",
 ]

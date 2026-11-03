@@ -39,10 +39,17 @@ def runner_command(run_id: uuid.UUID) -> str:
 
 
 def runner_env(
-    *, settings: Settings, bot: Bot, run_id: uuid.UUID, run_token: str
+    *,
+    settings: Settings,
+    bot: Bot,
+    run_id: uuid.UUID,
+    run_token: str,
+    resume_session_id: str | None = None,
 ) -> dict[str, str]:
     """Everything the runner gets. The run token is the only credential, by design."""
+    resume = {"ORBIT_RESUME_SESSION_ID": resume_session_id} if resume_session_id else {}
     return {
+        **resume,
         "ORBIT_RUN_ID": str(run_id),
         "ORBIT_API_URL": settings.public_base_url,
         "ORBIT_RUN_TOKEN": run_token,

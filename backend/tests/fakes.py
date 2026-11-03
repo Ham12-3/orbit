@@ -80,3 +80,13 @@ class RecordingEvents:
 
     def names(self) -> list[str]:
         return [name for name, _ in self.sent]
+
+
+class FakeTitler:
+    def __init__(self, title: str | None = "A Better Title") -> None:
+        self.next_title = title
+        self.calls: list[str] = []
+
+    async def title(self, message: str) -> str | None:
+        self.calls.append(message)
+        return self.next_title

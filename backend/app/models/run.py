@@ -26,7 +26,9 @@ class Run(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (Index("ix_runs_bot_id_status_created_at", "bot_id", "status", "created_at"),)
 
     bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
-    thread_id: Mapped[uuid.UUID | None]  # FK added with the threads table (Phase 2)
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("threads.id", ondelete="SET NULL"), index=True
+    )
     trigger_type: Mapped[RunTrigger] = mapped_column(db_enum(RunTrigger))
     trigger_ref: Mapped[str | None] = mapped_column(String(255))
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(

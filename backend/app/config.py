@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         env_file=REPO_ROOT / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        env_ignore_empty=True,  # `KEY=` in .env means "use the default", not ""
     )
 
     orbit_env: Literal["development", "test", "production"] = "development"
@@ -32,9 +33,17 @@ class Settings(BaseSettings):
     inngest_signing_key: SecretStr | None = None
     inngest_event_key: SecretStr | None = None
 
-    # Dashboard auth until Supabase lands (Phase 2): a static bearer token and one user.
+    # Dashboard auth: Supabase access tokens (ES256/RS256, verified against the project's JWKS).
+    supabase_url: str = ""
+    supabase_jwt_audience: str = "authenticated"
+    # Supabase caches its JWKS for up to 20 minutes and asks clients not to cache longer.
+    supabase_jwks_cache_s: int = 600
+    # Development only: this static bearer token acts as DEV_USER_ID (for scripts like
+    # make try-run). Set DEV_USER_ID to your Supabase user id to see those bots in the UI.
     dev_api_token: SecretStr | None = None
     dev_user_id: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    # Browser EventSource cannot send headers, so live run streams use short-lived tickets.
+    stream_ticket_ttl_s: int = 300
 
     # Public HTTPS origin of this backend (the ngrok domain in dev). Sandboxes call it.
     public_base_url: str = ""
@@ -77,7 +86,7 @@ class Settings(BaseSettings):
             raise ValueError("RUN_TOKEN_SECRET must be at least 32 characters")
         return value
 
-    @field_validator("public_base_url", "anthropic_upstream_url")
+    @field_validator("public_base_url", "anthropic_upstream_url", "supabase_url")
     @classmethod
     def _strip_trailing_slash(cls, value: str) -> str:
         return value.rstrip("/")

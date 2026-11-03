@@ -4,7 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.llm_proxy.pricing import SUPPORTED_MODELS
-from app.models.enums import BotStatus
+from app.models.enums import BotStatus, RunStatus
 
 
 class BotCreate(BaseModel):
@@ -44,3 +44,6 @@ class BotRead(BaseModel):
     active_run_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    last_run_status: RunStatus | None = None
+    last_run_at: datetime | None = None
+    cost_today_usd: float = 0.0

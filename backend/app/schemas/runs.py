@@ -18,6 +18,7 @@ class RunRead(BaseModel):
 
     id: uuid.UUID
     bot_id: uuid.UUID
+    thread_id: uuid.UUID | None
     trigger_type: RunTrigger
     status: RunStatus
     input_prompt: str
@@ -47,6 +48,11 @@ class RunEventRead(BaseModel):
 
 class RunDetail(RunRead):
     events: list[RunEventRead]
+
+
+class StreamTicketRead(BaseModel):
+    ticket: str
+    expires_at: datetime
 
 
 class RunnerEvent(BaseModel):

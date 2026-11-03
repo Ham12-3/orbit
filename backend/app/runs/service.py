@@ -17,11 +17,12 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.run_tokens import issue_run_token, revoke_run_tokens
+from app.chat.replies import ensure_bot_reply
 from app.config import Settings
 from app.db import Database
 from app.events import RUN_FINISHED, RUN_REQUESTED, EventSender
 from app.llm_proxy.metering import tokens_used_today
-from app.models import Bot, Run
+from app.models import Bot, Run, Thread
 from app.models.enums import TERMINAL_RUN_STATUSES, BotStatus, RunEventType, RunStatus, RunTrigger
 from app.runs.timeline import add_system_event
 from app.sandboxes import layout
@@ -65,11 +66,13 @@ class RunServices:
         prompt: str,
         trigger: RunTrigger = RunTrigger.MANUAL,
         trigger_ref: str | None = None,
+        thread_id: uuid.UUID | None = None,
     ) -> Run:
         run = Run(
             bot_id=bot.id,
             trigger_type=trigger,
             trigger_ref=trigger_ref,
+            thread_id=thread_id,
             input_prompt=prompt,
             status=RunStatus.QUEUED,
         )
@@ -155,7 +158,12 @@ class RunServices:
             pid = await sandbox.start_background(
                 layout.runner_command(rid),
                 envs=layout.runner_env(
-                    settings=self.settings, bot=bot, run_id=rid, run_token=token
+                    settings=self.settings,
+                    bot=bot,
+                    run_id=rid,
+                    run_token=token,
+                    # Read now, not at enqueue: the previous turn may have just finished.
+                    resume_session_id=await self._thread_session(s, run),
                 ),
                 cwd=layout.BOT_HOME,
             )
@@ -296,6 +304,8 @@ class RunServices:
             if run.sandbox_id:
                 await self._stop_sandbox(run.sandbox_id, rid)
 
+            await s.refresh(run)
+            await ensure_bot_reply(s, run)
             next_run_id = await self._release_bot(s, bot_id=run.bot_id, run_id=rid)
             await s.commit()
             return str(next_run_id) if next_run_id else None
@@ -321,7 +331,10 @@ class RunServices:
         await revoke_run_tokens(session, run.id)
         await session.commit()
         await session.refresh(run)
-        if not was_queued:
+        if was_queued:  # no workflow will finalize it
+            await ensure_bot_reply(session, run)
+            await session.commit()
+        else:
             await self._kill_runner_quietly(run)
             await self._send(RUN_FINISHED, run.id)
         return run
@@ -389,6 +402,11 @@ class RunServices:
         if run is None or bot is None:
             raise RunStateError(f"Run {run_id} not found")
         return run, bot
+
+    async def _thread_session(self, s: AsyncSession, run: Run) -> str | None:
+        if run.thread_id is None:
+            return None
+        return await s.scalar(select(Thread.agent_session_id).where(Thread.id == run.thread_id))
 
     async def _transition(
         self,

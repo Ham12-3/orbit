@@ -12,7 +12,7 @@ from app.events import RUN_FINISHED
 from app.models import LlmUsage, Run, RunToken
 from app.runs.service import RunServices
 from app.sandboxes import layout
-from tests.conftest import AUTH, SECRETS, create_bot, get_bot
+from tests.conftest import AUTH, SECRETS, USER_A, create_bot, get_bot
 from tests.fakes import FakeSandboxProvider, RecordingEvents
 
 
@@ -60,9 +60,7 @@ async def test_start_prepares_the_sandbox_and_launches_the_runner(
     bot, run_id = await started_run(client, services, name="Writer")
 
     sandbox = sandboxes.sandboxes["sbx-1"]
-    assert sandboxes.created_metadata == [
-        {"bot_id": bot["id"], "user_id": str(services.settings.dev_user_id)}
-    ]
+    assert sandboxes.created_metadata == [{"bot_id": bot["id"], "user_id": str(USER_A)}]
     assert "# Writer" in sandbox.files[layout.CLAUDE_MD_PATH]
     assert sandbox.files[layout.prompt_path(uuid.UUID(run_id))] == "Do the thing"
     # The current runner is pushed every run (as root: /opt/orbit is read-only to the bot).

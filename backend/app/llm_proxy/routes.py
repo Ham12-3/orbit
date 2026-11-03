@@ -6,7 +6,6 @@ are passed through byte for byte and streams are relayed unbuffered, as Claude C
 gateway protocol requires. Usage is read from the response on the way through.
 """
 
-import asyncio
 import contextlib
 import json
 import logging
@@ -21,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import DatabaseDep, SettingsDep, authenticate_run
 from app.auth.run_tokens import RunPrincipal
+from app.background import spawn
 from app.db import Database
 from app.llm_proxy.metering import record_usage, tokens_used_today
 from app.llm_proxy.pricing import SUPPORTED_MODELS, Usage
@@ -40,9 +40,6 @@ _RETURN_RESPONSE_HEADERS = {"content-type", "request-id", "retry-after", "x-shou
 _RETURN_RESPONSE_PREFIXES = ("anthropic-",)
 
 UsageCallback = Callable[[Usage], None]
-
-# Background usage writes outlive the response; keep references so they are not GC'd.
-_background_tasks: set[asyncio.Task[None]] = set()
 
 
 def anthropic_error(status: int, error_type: str, message: str) -> JSONResponse:
@@ -188,20 +185,16 @@ async def _forward(
 
 
 def _spawn_record(db: Database, principal: RunPrincipal, model: str, usage: Usage) -> None:
-    task = asyncio.create_task(_record(db, principal, model, usage))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    # The response may be gone by now (stream finished or client left); record anyway.
+    spawn(_record(db, principal, model, usage), name=f"usage-{principal.run_id}")
 
 
 async def _record(db: Database, principal: RunPrincipal, model: str, usage: Usage) -> None:
-    try:
-        async with db.session() as session:
-            await record_usage(
-                session, run_id=principal.run_id, bot_id=principal.bot_id, model=model, usage=usage
-            )
-            await session.commit()
-    except Exception:
-        logger.exception("Failed to record LLM usage for run %s", principal.run_id)
+    async with db.session() as session:
+        await record_usage(
+            session, run_id=principal.run_id, bot_id=principal.bot_id, model=model, usage=usage
+        )
+        await session.commit()
 
 
 async def _record_budget_stop(session: AsyncSession, principal: RunPrincipal, message: str) -> None:

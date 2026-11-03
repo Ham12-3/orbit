@@ -40,6 +40,11 @@ TERMINAL_RUN_STATUSES = frozenset(
 )
 
 
+class MessageRole(StrEnum):
+    USER = "user"
+    BOT = "bot"
+
+
 class RunEventType(StrEnum):
     TEXT = "text"
     TOOL_USE = "tool_use"

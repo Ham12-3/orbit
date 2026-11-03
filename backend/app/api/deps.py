@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.run_tokens import RunPrincipal, RunTokenError, verify_run_token
+from app.auth.supabase import SupabaseAuthError, SupabaseUnavailableError, SupabaseVerifier
 from app.config import Settings
 from app.db import Database
 from app.events import EventSender
@@ -56,19 +57,36 @@ def bearer_token(request: Request) -> str | None:
 @dataclass(frozen=True)
 class CurrentUser:
     id: uuid.UUID
+    email: str | None = None
 
 
-def get_current_user(request: Request, settings: SettingsDep) -> CurrentUser:
-    """Dashboard auth. Phase 1: a static dev token from .env. Phase 2 swaps in Supabase JWTs."""
+def _is_dev_token(token: str, settings: Settings) -> bool:
     expected = settings.dev_api_token
-    if expected is None:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "Dashboard auth is not configured (DEV_API_TOKEN)"
-        )
-    provided = bearer_token(request)
-    if provided is None or not secrets.compare_digest(provided, expected.get_secret_value()):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing token")
-    return CurrentUser(id=settings.dev_user_id)
+    return (
+        settings.orbit_env == "development"
+        and expected is not None
+        and secrets.compare_digest(token, expected.get_secret_value())
+    )
+
+
+async def get_current_user(request: Request, settings: SettingsDep) -> CurrentUser:
+    """Dashboard auth: a Supabase access token, or the dev token in development only."""
+    token = bearer_token(request)
+    if token is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing token")
+    if _is_dev_token(token, settings):
+        return CurrentUser(id=settings.dev_user_id)
+
+    verifier = cast(SupabaseVerifier | None, request.app.state.supabase_verifier)
+    if verifier is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "SUPABASE_URL is not set")
+    try:
+        claims = await verifier.verify(token)
+    except SupabaseUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Auth is unavailable") from exc
+    except SupabaseAuthError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token") from exc
+    return CurrentUser(id=claims.user_id, email=claims.email)
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]

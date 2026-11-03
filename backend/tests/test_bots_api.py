@@ -1,10 +1,11 @@
 import uuid
+from decimal import Decimal
 
 from httpx import AsyncClient
 
 from app.db import Database
 from app.events import RUN_REQUESTED
-from app.models import Bot
+from app.models import Bot, LlmUsage
 from tests.conftest import AUTH, create_bot
 from tests.fakes import RecordingEvents
 
@@ -73,3 +74,33 @@ async def test_other_users_bots_and_runs_are_invisible(client: AsyncClient, db: 
     assert (await client.get(f"/api/bots/{foreign.id}", headers=AUTH)).status_code == 404
     start = await client.post(f"/api/bots/{foreign.id}/runs", json={"prompt": "x"}, headers=AUTH)
     assert start.status_code == 404
+
+
+async def test_bot_list_shows_last_run_and_todays_cost(client: AsyncClient, db: Database) -> None:
+    bot = await create_bot(client)
+    run = (
+        await client.post(f"/api/bots/{bot['id']}/runs", json={"prompt": "x"}, headers=AUTH)
+    ).json()
+    async with db.session() as s:
+        s.add(
+            LlmUsage(
+                run_id=uuid.UUID(run["id"]),
+                bot_id=uuid.UUID(bot["id"]),
+                model="claude-sonnet-5-5",
+                input_tokens=1,
+                output_tokens=1,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                cost_usd=Decimal("0.25"),
+            )
+        )
+        await s.commit()
+
+    [listed] = (await client.get("/api/bots", headers=AUTH)).json()
+    by_slug = (await client.get(f"/api/bots/by-slug/{bot['slug']}", headers=AUTH)).json()
+
+    assert listed["last_run_status"] == "queued"
+    assert listed["cost_today_usd"] == 0.25
+    assert by_slug["id"] == bot["id"]
+    runs = (await client.get(f"/api/bots/{bot['id']}/runs", headers=AUTH)).json()
+    assert [r["id"] for r in runs] == [run["id"]]
