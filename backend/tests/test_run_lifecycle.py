@@ -65,6 +65,10 @@ async def test_start_prepares_the_sandbox_and_launches_the_runner(
     ]
     assert "# Writer" in sandbox.files[layout.CLAUDE_MD_PATH]
     assert sandbox.files[layout.prompt_path(uuid.UUID(run_id))] == "Do the thing"
+    # The current runner is pushed every run (as root: /opt/orbit is read-only to the bot).
+    runner_source = services.settings.runner_script_path.read_text(encoding="utf-8")
+    assert sandbox.files[layout.RUNNER_SCRIPT] == runner_source
+    assert layout.RUNNER_SCRIPT in sandbox.root_files
     [launch] = sandbox.started
     assert launch["command"].startswith(
         f"{layout.RUNNER_PYTHON} {layout.RUNNER_SCRIPT} --run-id {run_id}"

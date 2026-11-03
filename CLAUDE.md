@@ -5,19 +5,22 @@ Claude Agent SDK inside it, connects to the user's apps, runs on schedules and e
 it learns, and asks for approval before risky actions. The full spec is in [SPEC.md](SPEC.md); build
 phases are in section 10 of it.
 
-**Status:** Phase 1 (one bot, one run, end to end; API only) built. Next: Phase 2 (dashboard, auth,
-chat, live runs).
+**Status:** Phase 1 (one bot, one run, end to end; API only) done and verified live on E2B: a bot
+wrote `workspace/hello.txt`, and a second run read it back after pause/resume. Next: Phase 2
+(dashboard, auth, chat, live runs).
 
 ## Run it
 
-Prerequisites: Docker Desktop (running), uv, Node 20.9+, pnpm 10, GNU make, ngrok (with an authtoken
-and a static domain) for bot runs.
+Prerequisites: Docker Desktop (running), uv, Node 20.9+, pnpm 10, GNU make, and for bot runs the
+Microsoft Dev Tunnels CLI (`winget install Microsoft.devtunnel`, then `devtunnel user login`).
 
 ```bash
 make install            # deps; creates/updates .env and generates DEV_API_TOKEN + RUN_TOKEN_SECRET
-# then set ANTHROPIC_API_KEY, E2B_API_KEY and PUBLIC_BASE_URL=https://<static>.ngrok-free.app in .env
-make sandbox-template   # once, and whenever sandbox-template/ changes
-make dev                # Postgres + migrations, then API, web, Inngest Dev Server and the ngrok tunnel
+# then set ANTHROPIC_API_KEY and E2B_API_KEY in .env
+make tunnel-setup       # once: creates the dev tunnel, writes DEVTUNNEL_ID + PUBLIC_BASE_URL to .env
+make sandbox-template   # once, and after changing sandbox-template/template.py
+make dev                # Postgres + migrations, then API, web, Inngest Dev Server and the tunnel
+make try-run p="Create workspace/hello.txt containing today's date"   # bot=<id> reuses a bot
 ```
 
 | Service | URL |
@@ -27,14 +30,15 @@ make dev                # Postgres + migrations, then API, web, Inngest Dev Serv
 | Health | http://localhost:8000/health, /health/ready (checks DB) |
 | Inngest endpoint | http://localhost:8000/api/inngest |
 | Inngest Dev Server UI | http://localhost:8288 |
-| Public URL (sandboxes) | `PUBLIC_BASE_URL` -> :8000 via ngrok (inspector on :4040) |
+| Public URL (sandboxes) | `PUBLIC_BASE_URL` -> :8000 via the dev tunnel (`*-8000.<region>.devtunnels.ms`) |
 | Postgres | localhost:5432, user/pass/db `orbit` (tests use `orbit_test`) |
 
 Phase 1 API (send `Authorization: Bearer $DEV_API_TOKEN`): `POST /api/bots`, `GET /api/bots`,
 `GET /api/bots/{id}`, `POST /api/bots/{id}/runs {"prompt"}`, `GET /api/runs/{id}` (with events),
 `POST /api/runs/{id}/cancel`.
 
-Other targets: `make test`, `make test-e2b` (live, needs keys + template), `make lint`, `make fmt`,
+Other targets: `make test`, `make test-e2b` (live, needs keys + template), `make try-run`,
+`make tunnel-setup`, `make lint`, `make fmt`,
 `make typecheck`, `make check` (lint + typecheck + test), `make migrate`, `make revision m="..."`,
 `make db-up`, `make db-down`. Run `make` to list them.
 
@@ -52,7 +56,8 @@ package.json              dev orchestration only: concurrently + inngest-cli (pi
 ruff.toml                 applies backend's ruff config to sandbox-template/ and scripts/
 docker-compose.yml        Postgres 16; infra/postgres/init creates orbit_test
 scripts/init_env.py       creates/updates .env from .env.example, generates secrets
-scripts/tunnel.py         ngrok http 8000 --url $PUBLIC_BASE_URL (part of make dev)
+scripts/devtunnel.py      `setup` (make tunnel-setup) and `host` (part of make dev)
+scripts/try_run.py        make try-run: start a run and print its timeline
 backend/                  FastAPI control plane (uv, Python 3.12)
   pyproject.toml          deps + ruff, mypy, pytest, alembic config
   alembic/                migrations; env.py takes URL from Settings, metadata from app.models
@@ -121,16 +126,25 @@ phase that first puts code in them.
   starts a fresh runner). If the sandbox is gone, a new one is created and the run timeline says so.
   Background commands need `timeout=0` or E2B kills them after 60s.
 - **Template:** E2B's code-defined `Template()` builder (V1 Dockerfile builds were removed in
-  Aug 2026). `python:3.12` + git, curl, ripgrep, procps; runner + venv in `/opt/orbit`, root-owned.
-  No Node: the Agent SDK wheel bundles the Claude Code binary (and its own ripgrep). 2 vCPU, 2 GiB.
+  Aug 2026). `python:3.12` + git, curl, ripgrep, procps, bubblewrap; venv in `/opt/orbit`,
+  root-owned. No Node: the Agent SDK wheel bundles the Claude Code binary (and its own ripgrep).
+  2 vCPU, 2 GiB. A sandbox keeps the template it was created from: template changes only reach
+  bots whose sandbox is created after the rebuild. `runner.py` is different: the backend writes
+  the repo's current copy to `/opt/orbit/runner.py` as root at every run start, so runner fixes
+  reach existing bots immediately.
 - **Runner** (`sandbox-template/runner.py`): one `query()` with `setting_sources=["project"]`
-  (loads `bot/CLAUDE.md`), `system_prompt` = claude_code preset, `permission_mode=bypassPermissions`
-  (the sandbox is the boundary; runs as non-root `user`), `strict_mcp_config`, cwd `/home/user/bot`.
-  Env: `ANTHROPIC_BASE_URL={public}/llm`, `ANTHROPIC_AUTH_TOKEN=<run token>`,
-  `ANTHROPIC_DEFAULT_HAIKU_MODEL` pinned (the CLI's background model), non-essential traffic and
-  auto-memory off, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. It deletes `bot/.claude/settings*.json`
-  first (they could override the base URL) and drops `ORBIT_*` from its own env. Events go through
-  a background queue so slow HTTP never stalls the agent.
+  (loads `bot/CLAUDE.md`), `system_prompt` = claude_code preset, `strict_mcp_config`, cwd
+  `/home/user/bot`, runs as non-root `user`. Env: `ANTHROPIC_BASE_URL={public}/llm`,
+  `ANTHROPIC_AUTH_TOKEN=<run token>`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` pinned (the CLI's background
+  model), non-essential traffic and auto-memory off, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` (keeps
+  the token out of the agent's shell; needs bubblewrap, and Claude Code refuses to start without
+  it). The scrub also forces permission mode back to "default", so tools are pre-approved with
+  `allowed_tools` (Bash, Read, Write, Edit, Glob, Grep, NotebookEdit, WebFetch, WebSearch, Task,
+  ToolSearch, Skill) under `permission_mode="dontAsk"`; interactive-session tools (Cron*,
+  ScheduleWakeup, Monitor, worktrees, SendMessage, ...) are in `disallowed_tools`. It deletes
+  `bot/.claude/settings*.json` first (they could override the base URL), drops `ORBIT_*` from its
+  own env, logs Claude Code's stderr and attaches its tail to crash reports. Events go through a
+  background queue so slow HTTP never stalls the agent.
 - **Run tokens:** HS256 JWT (`sub`=run, `bot`, `aud=orbit-run`, exp = run timeout + 10 min); only
   the SHA-256 is stored; revoked on finalize and cancel. Accepted as Bearer or `x-api-key`.
   `RUN_TOKEN_SECRET` must be 32+ chars.
@@ -145,6 +159,14 @@ phase that first puts code in them.
   official pricing page; its keys are the model allow-list.
 - **Dashboard auth (Phase 1 only):** a static `DEV_API_TOKEN` bearer and one `DEV_USER_ID`. Needed
   because the tunnel makes the backend public. Phase 2 swaps `get_current_user` for Supabase JWTs.
+- **Tunnel = Microsoft Dev Tunnels**, not ngrok or Cloudflare. ngrok's free plan now requires agent
+  3.28+ and Windows Defender quarantined the new ngrok download; Cloudflare Quick Tunnels do not
+  support SSE (their docs) and named ones need a domain. A persistent dev tunnel keeps its URL
+  across restarts, allows anonymous access, passes our `Authorization` header through (it uses
+  `X-Tunnel-Authorization` for its own), and streamed a 3-minute SSE test unbuffered from inside an
+  E2B sandbox. Created with `--request-timeout 0`. It is a preview service "for adhoc testing and
+  development, not for production"; production gets a real URL in Phase 8. The tunnel's
+  "inspect" URL requires the owner's login.
 - **run_events** use a bigint identity id (total order, future SSE cursor) and a nullable runner
   `seq` (unique per run, for idempotent retries). Server-written status events have no seq.
 - **Bot identity:** `CLAUDE.md` is rendered from the bot's config and rewritten at every run start
@@ -164,7 +186,11 @@ phase that first puts code in them.
 - No rate limiting on public endpoints yet (spec section 7); planned for Phase 8.
 - The Inngest Dev Server loses in-flight runs on restart; the sweeper cleans up within ~10 minutes
   after the run's deadline. Inngest Cloud in production does not have this problem.
-- Composio webhooks (Phase 5) need the ngrok static domain to stay stable.
+- The dev tunnel needs the `devtunnel user login` token, valid "several days"; re-run the login
+  if `make dev` shows the tunnel failing. The tunnel expires after 30 days without use, and is
+  limited to 5 GB/month. Composio webhooks (Phase 5) can use the same stable URL.
+- Bots created before a template rebuild keep their old sandbox. There is no "recreate sandbox"
+  action yet (Phase 8 candidate); for now create a new bot.
 
 ## Library notes (verified 2026-11-02)
 
@@ -184,6 +210,9 @@ phase that first puts code in them.
 - Pricing per MTok (input / 5m write / 1h write / cache read / output): Opus 5.5 4 / 5 / 8 / 0.20 / 20;
   Sonnet 5.5 2 / 2.50 / 4 / 0.10 / 10; Haiku 5.5 0.10 / 0.125 / 0.20 / 0.01 / 0.50, and 5x all rates
   when the prompt (incl. cache tokens) is over 100K.
-- inngest-cli 1.49.0, ngrok 3.20 (`ngrok http 8000 --url <url>`), FastAPI 0.162, SQLAlchemy 2.1
+- devtunnel CLI 1.0.2115: `create -a --expiration 30d --request-timeout 0 --json`, `port create
+  <id> -p 8000 --protocol http`, `host <id>` (prints the URL; `show --json` does not).
+- Claude Code (bundled with the SDK) 2.1.316.
+- inngest-cli 1.49.0, FastAPI 0.162, SQLAlchemy 2.1
   (`postgresql.distinct_on` replaces `.distinct(col)`), Alembic 1.20, pydantic-settings 2.16, PyJWT
   2.15, pytest 9, pytest-asyncio 1.4, Next.js 16.4, React 19.3, Tailwind 4.3, shadcn CLI 4.23.

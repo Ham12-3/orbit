@@ -130,6 +130,11 @@ class RunServices:
             await sandbox.make_dirs(layout.WORKSPACE_DIR, layout.MEMORY_DIR, layout.run_dir(rid))
             await sandbox.write_text(layout.CLAUDE_MD_PATH, layout.render_claude_md(bot))
             await sandbox.write_text(layout.prompt_path(rid), run.input_prompt)
+            await sandbox.write_text(
+                layout.RUNNER_SCRIPT,
+                self.settings.runner_script_path.read_text(encoding="utf-8"),
+                as_root=True,
+            )
 
             # A retried start step must not leave a second runner or a live token behind.
             await sandbox.kill_run_processes(rid)

@@ -5,11 +5,12 @@
 API := uv --directory backend run
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev db-up db-down migrate migrate-test revision test test-e2b lint fmt typecheck check sandbox-template try-run
+.PHONY: help install dev db-up db-down migrate migrate-test revision test test-e2b lint fmt typecheck check sandbox-template try-run tunnel-setup
 
 help:
 	@echo make install      - install deps, create/update .env files and generated secrets
-	@echo make dev          - Postgres + migrations, then API, web, Inngest Dev Server, ngrok
+	@echo make dev          - Postgres + migrations, then API, web, Inngest Dev Server, dev tunnel
+	@echo make tunnel-setup - once: create the dev tunnel, write DEVTUNNEL_ID + PUBLIC_BASE_URL
 	@echo make sandbox-template - build the bot sandbox template on E2B
 	@echo make test         - run backend tests (starts Postgres, migrates test DB)
 	@echo make test-e2b     - live check against E2B: no real key inside a sandbox
@@ -52,6 +53,9 @@ test-e2b:
 
 sandbox-template:
 	$(API) python ../sandbox-template/build.py
+
+tunnel-setup:
+	$(API) python ../scripts/devtunnel.py setup
 
 try-run:
 	$(API) python ../scripts/try_run.py "$(p)" --bot "$(bot)"

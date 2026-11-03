@@ -68,7 +68,9 @@ def test_options_load_the_bot_claude_md(tmp_path: Path) -> None:
     assert options.setting_sources == ["project"]
     assert options.cwd == str(tmp_path)
     assert options.max_turns == 7
-    assert options.permission_mode == "bypassPermissions"
+    assert options.permission_mode == "dontAsk"
+    assert "Write" in options.allowed_tools
+    assert "ScheduleWakeup" in options.disallowed_tools
 
 
 def test_project_settings_files_are_removed(tmp_path: Path) -> None:
@@ -173,3 +175,19 @@ async def test_reporter_gives_up_on_a_revoked_token(tmp_path: Path) -> None:
         reporter = runner.Reporter(_config(tmp_path), client)
         assert not await reporter.complete({"status": "completed"})
     assert calls == 1
+
+
+def test_crash_report_includes_what_claude_code_printed() -> None:
+    stderr = runner.StderrTail(size=2)
+    for line in ["starting", "bubblewrap is required", "exiting"]:
+        stderr(line)
+
+    report = runner.crash_report(RuntimeError("Command failed"), stderr.text())
+
+    assert report.splitlines() == [
+        "RuntimeError: Command failed",
+        "Claude Code said:",
+        "bubblewrap is required",
+        "exiting",
+    ]
+    assert len(runner.crash_report(RuntimeError("x" * 50_000), "")) == runner.MAX_ERROR_CHARS

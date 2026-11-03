@@ -20,8 +20,13 @@ class E2BSandbox:
     def sandbox_id(self) -> str:
         return str(self._sandbox.sandbox_id)
 
-    async def write_text(self, path: str, content: str) -> None:
-        await self._sandbox.files.write(path, content, request_timeout=self._request_timeout_s)
+    async def write_text(self, path: str, content: str, *, as_root: bool = False) -> None:
+        await self._sandbox.files.write(
+            path,
+            content,
+            user="root" if as_root else None,
+            request_timeout=self._request_timeout_s,
+        )
 
     async def make_dirs(self, *paths: str) -> None:
         for path in paths:

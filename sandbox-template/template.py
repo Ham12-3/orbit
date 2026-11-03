@@ -15,7 +15,9 @@ HTTPX_VERSION = "0.28.1"
 template = (
     Template(file_context_path=Path(__file__).parent)
     .from_python_image("3.12")
-    .apt_install(["git", "curl", "ripgrep", "procps"])
+    # bubblewrap: Claude Code needs it for CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (keeps the run
+    # token out of the agent's shell commands) and refuses to start without it.
+    .apt_install(["git", "curl", "ripgrep", "procps", "bubblewrap"])
     .run_cmd(
         [
             "python3 -m venv /opt/orbit/venv",

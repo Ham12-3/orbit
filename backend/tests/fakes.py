@@ -11,6 +11,7 @@ class FakeSandbox:
     def __init__(self, sandbox_id: str) -> None:
         self._sandbox_id = sandbox_id
         self.files: dict[str, str] = {}
+        self.root_files: set[str] = set()
         self.dirs: set[str] = set()
         self.started: list[dict[str, Any]] = []
         self.running: dict[int, str] = {}  # pid -> command
@@ -21,8 +22,10 @@ class FakeSandbox:
     def sandbox_id(self) -> str:
         return self._sandbox_id
 
-    async def write_text(self, path: str, content: str) -> None:
+    async def write_text(self, path: str, content: str, *, as_root: bool = False) -> None:
         self.files[path] = content
+        if as_root:
+            self.root_files.add(path)
 
     async def make_dirs(self, *paths: str) -> None:
         self.dirs.update(paths)

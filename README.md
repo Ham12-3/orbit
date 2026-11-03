@@ -8,18 +8,25 @@ See [SPEC.md](SPEC.md) for the product spec and [CLAUDE.md](CLAUDE.md) for the e
 ## Quickstart
 
 Prerequisites: Docker Desktop (running), [uv](https://docs.astral.sh/uv/), Node 20.9+, pnpm 10,
-GNU make, and [ngrok](https://ngrok.com/) with an authtoken and a free static domain.
+GNU make, and the Microsoft Dev Tunnels CLI (`winget install Microsoft.devtunnel`, then
+`devtunnel user login`) so bot sandboxes can reach your machine.
 
 ```bash
 make install
 ```
 
-Then fill in `.env`: `ANTHROPIC_API_KEY`, `E2B_API_KEY`, and
-`PUBLIC_BASE_URL=https://<your-static-domain>.ngrok-free.app`.
+Then fill in `ANTHROPIC_API_KEY` and `E2B_API_KEY` in `.env`, and:
 
 ```bash
+make tunnel-setup
 make sandbox-template
 make dev
+```
+
+Try a bot run (in another terminal):
+
+```bash
+make try-run p="Create workspace/hello.txt containing today's date"
 ```
 
 Then open:

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,10 +39,43 @@ from claude_agent_sdk import (
 logger = logging.getLogger("orbit.runner")
 
 MAX_TEXT_CHARS = 20_000
+MAX_ERROR_CHARS = 4_000  # the backend accepts up to 10k
 HTTP_TIMEOUT = httpx.Timeout(15.0)
 EVENT_ATTEMPTS = 4
 COMPLETE_ATTEMPTS = 10
 NOT_RETRYABLE = {400, 401, 403, 404, 409, 422}
+
+# The bot works on its own computer; these need no human approval inside the sandbox.
+ALLOWED_TOOLS = [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "ToolSearch",
+    "Skill",
+]
+# Interactive Claude Code session features that mean nothing in a one-shot bot run (Orbit
+# has its own schedules). Disallowed tools are removed from the model's context entirely.
+DISALLOWED_TOOLS = [
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "Monitor",
+    "EnterWorktree",
+    "ExitWorktree",
+    "SendMessage",
+    "ListAgents",
+    "TaskStop",
+    "Workflow",
+    "ReportFindings",
+]
 
 Event = tuple[str, dict[str, Any]]
 
@@ -87,7 +121,23 @@ def sdk_env(config: RunnerConfig) -> dict[str, str]:
     }
 
 
-def build_options(config: RunnerConfig) -> ClaudeAgentOptions:
+class StderrTail:
+    """Collects Claude Code's stderr: logged, and the tail is attached to a crash report."""
+
+    def __init__(self, size: int = 20) -> None:
+        self.lines: deque[str] = deque(maxlen=size)
+
+    def __call__(self, line: str) -> None:
+        self.lines.append(line)
+        logger.warning("claude: %s", line)
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+def build_options(
+    config: RunnerConfig, stderr: Callable[[str], None] | None = None
+) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         model=config.model,
         max_turns=config.max_turns,
@@ -95,10 +145,14 @@ def build_options(config: RunnerConfig) -> ClaudeAgentOptions:
         system_prompt={"type": "preset", "preset": "claude_code"},
         setting_sources=["project"],  # loads bot/CLAUDE.md
         strict_mcp_config=True,
-        permission_mode="bypassPermissions",  # the sandbox is the security boundary
+        # With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB on, Claude Code forces permission mode back
+        # to "default", so tools must be pre-approved; anything else is denied, not prompted.
+        permission_mode="dontAsk",
+        allowed_tools=ALLOWED_TOOLS,
+        disallowed_tools=DISALLOWED_TOOLS,
         env=sdk_env(config),
         resume=config.resume_session_id,
-        stderr=lambda line: logger.debug("cli: %s", line),
+        stderr=stderr,
     )
 
 
@@ -198,6 +252,14 @@ def message_to_events(message: object) -> list[Event]:
     return events
 
 
+def crash_report(exc: Exception, stderr_tail: str) -> str:
+    """The SDK's own message only says "check stderr"; include what Claude Code printed."""
+    report = f"{type(exc).__name__}: {exc}"
+    if stderr_tail:
+        report = f"{report}\nClaude Code said:\n{stderr_tail}"
+    return report[:MAX_ERROR_CHARS]
+
+
 def build_completion(
     result: ResultMessage | None, error: str | None, *, max_turns: int
 ) -> dict[str, Any]:
@@ -285,17 +347,19 @@ async def run(config: RunnerConfig) -> int:
         reporter.start()
         result: ResultMessage | None = None
         error: str | None = None
+        stderr = StderrTail()
         try:
-            async for message in query(prompt=config.prompt, options=build_options(config)):
+            options = build_options(config, stderr=stderr)
+            async for message in query(prompt=config.prompt, options=options):
                 for type_, payload in message_to_events(message):
                     reporter.event(type_, payload)
                 if isinstance(message, ResultMessage):
                     result = message
         except Exception as exc:  # the SDK raises after an error result; keep the result
-            error = f"{type(exc).__name__}: {exc}"
+            error = crash_report(exc, stderr.text())
             logger.exception("Agent query failed")
             if result is None:
-                reporter.event("error", {"message": _clip(error)})
+                reporter.event("error", {"message": error})
         await reporter.close()
         completion = build_completion(result, error, max_turns=config.max_turns)
         if not await reporter.complete(completion):

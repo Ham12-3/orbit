@@ -44,6 +44,18 @@ def merge_root_env(example: Path, target: Path) -> None:
         print(f"generated {key}")
 
 
+def set_env_values(target: Path, values: dict[str, str]) -> None:
+    """Set keys in an env file, replacing existing lines or appending new ones."""
+    lines = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
+    remaining = dict(values)
+    for i, line in enumerate(lines):
+        match = LINE.match(line)
+        if match and match.group(1) in remaining:
+            lines[i] = f"{match.group(1)}={remaining.pop(match.group(1))}"
+    lines.extend(f"{key}={value}" for key, value in remaining.items())
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def copy_if_missing(example: Path, target: Path) -> None:
     if target.exists():
         print(f"kept    {target.relative_to(ROOT)}")
